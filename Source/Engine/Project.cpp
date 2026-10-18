@@ -6,9 +6,49 @@
 
 namespace cm
 {
+namespace
+{
+int effectiveColour (const Project& p)
+{
+    int c = std::clamp (p.colour, 0, kNumColours - 1);
+    if (p.sevenths && c == 0) c = 1;
+    return c;
+}
+}
+
+void Project::applyGenreDefaults()
+{
+    const auto& gp = genreProfile (genre);
+    setColour (gp.colour);
+    chordStyle = gp.chordStyle;
+    stepsPerChord = gp.stepsPerChord;
+    adventure = gp.adventure;
+    density = gp.energy;
+    leaps = gp.movement;
+    tension = gp.tension;
+    contour = gp.contour;
+    setRegister (gp.reg);
+    ensemble = gp.ensemble;
+    poly = gp.poly;
+    presetIndex = std::clamp (presetIndex, 0, std::max (0, int (presetNames (genre, key).size()) - 1));
+}
+
+void Project::setColour (int c)
+{
+    colour = std::clamp (c, 0, kNumColours - 1);
+    sevenths = colour >= 1;
+    for (auto& ch : progression) ch = adaptColour (ch, key, colour);
+}
+
+void Project::setRegister (int r)
+{
+    registerIndex = std::clamp (r, 0, kNumRegisters - 1);
+    registerRange (registerIndex, lowNote, highNote);
+}
+
 void Project::applyPreset()
 {
-    progression = chordsFromPreset (key, presetIndex, sevenths);
+    progression = presetChords (genre, key, presetIndex, effectiveColour (*this));
     progLength = int (progression.size());
 }
 
@@ -18,9 +58,16 @@ void Project::randomProgression()
     o.key = key;
     o.length = progLength;
     o.sevenths = sevenths;
+    o.colour = effectiveColour (*this);
     o.adventure = adventure;
     o.seed = progSeed;
+    o.genre = genre;
     progression = generateProgression (o);
+}
+
+void Project::reharmonizeNow()
+{
+    progression = reharmonize (progression, key, effectiveColour (*this), adventure, genre, progSeed);
 }
 
 void Project::generateMelodyNow()
@@ -30,6 +77,9 @@ void Project::generateMelodyNow()
     o.stepsPerChord = stepsPerChord;
     o.density = density;
     o.leaps = leaps;
+    o.tension = tension;
+    o.contour = contour;
+    o.genre = genre;
     o.lowNote = lowNote;
     o.highNote = highNote;
     o.seed = melodySeed;
@@ -56,17 +106,39 @@ void Project::harmonizeCapture()
     const int slotsNeeded = (end + slot - 1) / slot;
     const int num = std::clamp (std::max (slotsNeeded, 1), 1, kMaxChords);
 
-    progression = harmonizeMelody (notes, key, stepsPerChord, num, sevenths, adventure);
+    progression = harmonizeMelody (notes, key, stepsPerChord, num, sevenths, adventure, genre, effectiveColour (*this));
     progLength = int (progression.size());
+}
+
+std::vector<Part> Project::arrangement() const
+{
+    ArrangeOptions o;
+    o.key = key;
+    o.ensemble = ensemble;
+    o.poly = poly;
+    o.style = chordStyle;
+    o.stepsPerChord = stepsPerChord;
+    o.bass = bass;
+    o.bassStyle = bassStyle();
+    o.swing = genreProfile (genre).swing;
+    return arrange (progression, o);
 }
 
 std::vector<Note> Project::chordNotes() const
 {
-    RenderOptions r;
-    r.style = chordStyle;
-    r.stepsPerChord = stepsPerChord;
-    r.bass = bass;
-    return renderChords (progression, r);
+    return mergeParts (arrangement());
+}
+
+std::vector<std::string> Project::polychordNames() const
+{
+    std::vector<std::string> out;
+    for (const auto& c : progression)
+    {
+        if (poly == Polyharmony::UpperTriad) out.push_back (polychordName (c, upperStructure (c, key), key));
+        else if (poly == Polyharmony::Extensions) out.push_back (chordName (adaptColour (c, key, 2), key));
+        else out.push_back (chordName (c, key));
+    }
+    return out;
 }
 
 int Project::lengthTicks() const
@@ -156,6 +228,13 @@ std::string Project::serialize() const
     os << "snap=" << int (snapToScale) << "\n";
     os << "volume=" << int (volume * 1000 + 0.5) << "\n";
     os << "uiscale=" << int (uiScale * 1000 + 0.5) << "\n";
+    os << "genre=" << int (genre) << "\n";
+    os << "colour=" << colour << "\n";
+    os << "tension=" << int (tension * 1000 + 0.5) << "\n";
+    os << "contour=" << int (contour) << "\n";
+    os << "register=" << registerIndex << "\n";
+    os << "ensemble=" << int (ensemble) << "\n";
+    os << "poly=" << int (poly) << "\n";
 
     os << "prog=";
     for (size_t i = 0; i < progression.size(); ++i)
@@ -174,6 +253,7 @@ bool Project::deserialize (const std::string& text)
     if (text.rfind ("ChordMateProject", 0) != 0) return false;
 
     Project p;   // parte dai default: i campi mancanti restano validi
+    bool haveColour = false;
     for (const auto& line : split (text, '\n'))
     {
         const auto eq = line.find ('=');
@@ -202,6 +282,13 @@ bool Project::deserialize (const std::string& text)
         else if (k == "snap")       p.snapToScale = toInt (v) != 0;
         else if (k == "volume")     p.volume = std::clamp (toInt (v) / 1000.0, 0.0, 1.0);
         else if (k == "uiscale")    p.uiScale = std::clamp (toInt (v, 1000) / 1000.0, 0.6, 2.0);
+        else if (k == "genre")      p.genre = genreFromIndex (toInt (v));
+        else if (k == "colour")     { p.colour = std::clamp (toInt (v), 0, kNumColours - 1); haveColour = true; }
+        else if (k == "tension")    p.tension = std::clamp (toInt (v, 250) / 1000.0, 0.0, 1.0);
+        else if (k == "contour")    p.contour = Contour (std::clamp (toInt (v), 0, kNumContours - 1));
+        else if (k == "register")   p.registerIndex = std::clamp (toInt (v, 2), 0, kNumRegisters - 1);
+        else if (k == "ensemble")   p.ensemble = ensembleFromIndex (toInt (v));
+        else if (k == "poly")       p.poly = polyharmonyFromIndex (toInt (v));
         else if (k == "prog")
         {
             for (const auto& item : split (v, ','))
@@ -215,6 +302,7 @@ bool Project::deserialize (const std::string& text)
         else if (k == "mel") p.melody = notesFromString (v);
         else if (k == "cap") p.capture = notesFromString (v);
     }
+    if (! haveColour) p.colour = p.sevenths ? 1 : 0;      // progetti salvati prima dei colori
     *this = p;
     return true;
 }

@@ -1,4 +1,5 @@
 #pragma once
+#include "Style.h"
 #include "Theory.h"
 #include <string>
 #include <vector>
@@ -9,9 +10,13 @@ namespace cm
 // Nessuna dipendenza da JUCE: serializzabile in testo e testabile da riga di comando.
 struct Project
 {
+    // stile
+    Genre genre = Genre::Universal;
+
     // armonia
     Key key;
-    bool sevenths = false;
+    bool sevenths = false;                   // tenuto in sincronia con colour (colour >= 1)
+    int colour = 0;                          // 0 = triadi, 1 = settime, 2 = estese
     double adventure = 0.3;
     int presetIndex = 0;
     int progLength = 4;
@@ -20,13 +25,20 @@ struct Project
     bool bass = true;
     uint32_t progSeed = 1;
 
-    // melodia
+    // melodia: tre macro (energia = density, movimento = leaps, tensione) + contorno + registro
     double density = 0.5;
     double leaps = 0.3;
+    double tension = 0.25;
+    Contour contour = Contour::Free;
+    int registerIndex = 2;
     int lowNote = 60;
     int highNote = 84;
     uint32_t melodySeed = 1;
     bool resolveEnd = true;
+
+    // arrangiamento
+    Ensemble ensemble = Ensemble::Piano;
+    Polyharmony poly = Polyharmony::Off;
 
     // cattura
     int quantGrid = kStepTicks;              // 0 = off
@@ -42,14 +54,21 @@ struct Project
     std::vector<Note> capture;
 
     // azioni
+    void applyGenreDefaults();               // imposta colore, ritmo, melodia, ensemble... tipici del genere
+    void setColour (int c);                  // cambia il colore e adatta la progressione
+    void setRegister (int r);
     void applyPreset();
     void randomProgression();
+    void reharmonizeNow();
     void generateMelodyNow();
     void harmonizeCapture();
 
     // risultati
-    std::vector<Note> chordNotes() const;
+    BassStyle bassStyle() const { return genreProfile (genre).bass; }
+    std::vector<Part> arrangement() const;   // parti dell'ensemble (senza melodia)
+    std::vector<Note> chordNotes() const;    // tutte le parti armoniche fuse
     std::vector<Note> processedCapture() const;
+    std::vector<std::string> polychordNames() const;
     int lengthTicks() const;                 // lunghezza della progressione
     static int captureLengthTicks (const std::vector<Note>& notes);   // arrotondata alla battuta
 

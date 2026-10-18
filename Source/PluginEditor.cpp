@@ -48,7 +48,17 @@ ChordMatePanel::ChordMatePanel (ChordMateProcessor& p)
     rootBox.setTooltip (U8 ("Tonica della tonalità"));
     scaleBox.setTooltip (U8 ("Scala / modo"));
 
-    setupButton (seventhsToggle, U8 ("Accordi di settima"));
+    for (int i = 0; i < cm::kNumGenres; ++i)
+        genreBox.addItem (U8 ("Genere: ") + U8 (cm::genreName (cm::genreFromIndex (i))), i + 1);
+    genreBox.setTooltip (U8 ("Macro-genere di riferimento: cambia preset, suggerimenti, ritmo della melodia, "
+                             "basso, colore degli accordi e arrangiamento"));
+    colourBox.addItem (U8 ("Triadi"), 1);
+    colourBox.addItem (U8 ("Settime"), 2);
+    colourBox.addItem (U8 ("Estese (9ª in scala)"), 3);
+    colourBox.setTooltip (U8 ("Colore degli accordi: la 9ª si aggiunge solo se appartiene alla scala"));
+    addAndMakeVisible (genreBox);
+    addAndMakeVisible (colourBox);
+
     setupLabel (bpmLabel, "", 13.0f, ui::dim);
     bpmLabel.setJustificationType (juce::Justification::centredRight);
     setupButton (playBtn, U8 ("▶  Ascolta tutto"));
@@ -72,6 +82,9 @@ ChordMatePanel::ChordMatePanel (ChordMateProcessor& p)
     for (auto* c : { &presetBox, &lengthBox, &spcBox, &styleBox }) addAndMakeVisible (*c);
     setupButton (applyPresetBtn, U8 ("Applica preset"));
     setupButton (randomBtn, U8 ("Genera casuale"));
+    setupButton (reharmBtn, U8 ("Rearmonizza"));
+    reharmBtn.setTooltip (U8 ("Sostituisce alcuni accordi con altri della stessa funzione, dominanti secondarie "
+                              "o sostituzioni di tritono, nello stile del genere (primo e ultimo restano)"));
     setupButton (clearBtn, U8 ("Svuota"));
     setupButton (bassToggle, U8 ("Basso"));
     addAndMakeVisible (adventure);
@@ -92,7 +105,7 @@ ChordMatePanel::ChordMatePanel (ChordMateProcessor& p)
             else
             {
                 selectedSlot = n - 1;
-                insertChord (cm::chordAtDegree (prj.key, 0, prj.sevenths, true), false);
+                insertChord (coloured (cm::chordAtDegree (prj.key, 0, false, true)), false);
                 return;
             }
             refreshSlots();
@@ -115,14 +128,29 @@ ChordMatePanel::ChordMatePanel (ChordMateProcessor& p)
     }
 
     // ------------------------------------------------------------ melodia
-    for (auto* s : { &density, &leaps, &lowNote, &highNote }) addAndMakeVisible (*s);
-    lowNote.slider.textFromValueFunction = [] (double v) { return ui::midiNoteName ((int) v); };
-    highNote.slider.textFromValueFunction = [] (double v) { return ui::midiNoteName ((int) v); };
-    lowNote.slider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 44, 18);
-    highNote.slider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 44, 18);
-    setupButton (melodyBtn, U8 ("Genera melodia"));
-    setupButton (resolveToggle, U8 ("Chiudi sulla fondamentale"));
+    for (auto* s : { &energy, &movement, &tension }) addAndMakeVisible (*s);
+    energy.slider.setTooltip (U8 ("Quante note, quanto corte e quanto accentate"));
+    movement.slider.setTooltip (U8 ("0 = per gradi congiunti · 1 = salti ampi"));
+    tension.slider.setTooltip (U8 ("0 = note dell'accordo sui tempi forti · alto = appoggiature, 9ª/13ª, cromatismi"));
+    for (int i = 0; i < cm::kNumContours; ++i) contourBox.addItem (U8 (cm::contourName (cm::Contour (i))), i + 1);
+    for (int i = 0; i < cm::kNumRegisters; ++i) registerBox.addItem (U8 (cm::registerName (i)), i + 1);
+    contourBox.setTooltip (U8 ("Forma della frase: dove va la melodia nel tempo"));
+    registerBox.setTooltip (U8 ("Altezza della melodia"));
+    addAndMakeVisible (contourBox);
+    addAndMakeVisible (registerBox);
+    setupButton (melodyBtn, U8 ("Nuova melodia"));
+    melodyBtn.setTooltip (U8 ("Genera una nuova melodia sugli accordi. I controlli la ritoccano senza cambiarla del tutto."));
     addAndMakeVisible (roll);
+
+    // ------------------------------------------------------------ arrangiamento
+    for (int i = 0; i < cm::kNumEnsembles; ++i) ensembleBox.addItem (U8 (cm::ensembleName (cm::ensembleFromIndex (i))), i + 1);
+    for (int i = 0; i < cm::kNumPolyharmony; ++i) polyBox.addItem (U8 (cm::polyharmonyName (cm::polyharmonyFromIndex (i))), i + 1);
+    ensembleBox.setTooltip (U8 ("Chi suona gli accordi: condotta delle parti a 4 voci, ostinati con gli stili ritmici"));
+    polyBox.setTooltip (U8 ("Poliarmonia: estensioni in scala o una triade diversa sopra l'accordo (poliaccordo)"));
+    addAndMakeVisible (ensembleBox);
+    addAndMakeVisible (polyBox);
+    setupLabel (partsInfo, "", 12.0f, ui::dim);
+    setupLabel (polyInfo, "", 12.5f, ui::text);
 
     // ------------------------------------------------------------ cattura MIDI
     setupButton (recBtn, U8 ("● Registra"));
@@ -150,6 +178,9 @@ ChordMatePanel::ChordMatePanel (ChordMateProcessor& p)
     dragMelody.caption = U8 ("Melodia .mid");
     dragMelody.subtitle = U8 ("trascina su una traccia MIDI di Live");
     dragMelody.colour = ui::accent;
+    dragArrangement.caption = U8 ("Arrangiamento .mid");
+    dragArrangement.subtitle = U8 ("multitraccia: una traccia per sezione");
+    dragArrangement.colour = juce::Colour (0xffc792ea);
     dragCapture.caption = U8 ("Cattura .mid");
     dragCapture.subtitle = U8 ("note registrate (con quantizzazione)");
     dragCapture.colour = ui::accent2;
@@ -165,21 +196,23 @@ ChordMatePanel::ChordMatePanel (ChordMateProcessor& p)
         return prj.melody.empty() ? juce::File() : writeMidi (prj.melody, prj.lengthTicks(), "Melodia");
     };
     dragMelody.hasContent = [this] { return ! prj.melody.empty(); };
+    dragArrangement.makeFile = [this] { return prj.progression.empty() ? juce::File() : writeArrangementMidi(); };
+    dragArrangement.hasContent = [this] { return ! prj.progression.empty(); };
     dragCapture.makeFile = [this]
     {
         const auto n = prj.processedCapture();
         return n.empty() ? juce::File() : writeMidi (n, cm::Project::captureLengthTicks (n), "Cattura");
     };
     dragCapture.hasContent = [this] { return ! prj.capture.empty(); };
-    for (auto* d : { &dragChords, &dragMelody, &dragCapture })
+    for (auto* d : { &dragChords, &dragMelody, &dragArrangement, &dragCapture })
     {
         d->onSave = [this] (const juce::File& f) { saveMidiAs (f); };
         addAndMakeVisible (*d);
     }
 
     setupLabel (hint,
-                U8 ("Analisi: «MIDI From» della traccia ChordMate = traccia da ascoltare. "
-                    "Trascina un riquadro su una traccia MIDI (clic = salva con nome)."),
+                U8 ("Trascina un riquadro su una traccia MIDI (clic = salva). «Arrangiamento» va nello "
+                    "spazio vuoto sotto le tracce: Live crea una traccia per sezione."),
                 11.0f, ui::dim);
     hint.setMinimumHorizontalScale (1.0f);
 
@@ -194,10 +227,11 @@ ChordMatePanel::ChordMatePanel (ChordMateProcessor& p)
         refreshAll();
         restartPreviewIfPlaying();
     };
-    seventhsToggle.onClick = [this]
+    genreBox.onChange = [this] { if (uiReady) onGenreChanged (genreBox.getSelectedId() - 1); };
+    colourBox.onChange = [this]
     {
-        prj.sevenths = seventhsToggle.getToggleState();
-        convertSevenths();
+        if (! uiReady) return;
+        prj.setColour (colourBox.getSelectedId() - 1);
         afterProgressionChanged();
     };
 
@@ -240,6 +274,18 @@ ChordMatePanel::ChordMatePanel (ChordMateProcessor& p)
         afterProgressionChanged();
         proc.playAll();
     };
+    reharmBtn.onClick = [this]
+    {
+        if (prj.progression.size() < 3)
+        {
+            hint.setText (U8 ("Per rearmonizzare servono almeno 3 accordi (il primo e l'ultimo restano)."), juce::dontSendNotification);
+            return;
+        }
+        prj.progSeed = (uint32_t) juce::Random::getSystemRandom().nextInt (1000000) + 1;
+        prj.reharmonizeNow();
+        afterProgressionChanged();
+        proc.playAll();
+    };
     clearBtn.onClick = [this]
     {
         prj.progression.clear();
@@ -279,23 +325,41 @@ ChordMatePanel::ChordMatePanel (ChordMateProcessor& p)
     auto melodyTweak = [this]
     {
         if (! uiReady) return;
-        prj.density = density.slider.getValue();
-        prj.leaps = leaps.slider.getValue();
-        prj.lowNote = (int) lowNote.slider.getValue();
-        prj.highNote = (int) highNote.slider.getValue();
-        if (prj.highNote < prj.lowNote + 12)
-        {
-            prj.highNote = std::min (108, prj.lowNote + 12);
-            highNote.slider.setValue (prj.highNote, juce::dontSendNotification);
-        }
-        if (! prj.melody.empty())
-        {
-            prj.generateMelodyNow();
-            refreshRoll();
-            restartPreviewIfPlaying();
-        }
+        prj.density = energy.slider.getValue();
+        prj.leaps = movement.slider.getValue();
+        prj.tension = tension.slider.getValue();
+        afterMelodySettingsChanged();
     };
-    for (auto* s : { &density, &leaps, &lowNote, &highNote }) s->slider.onValueChange = melodyTweak;
+    for (auto* s : { &energy, &movement, &tension }) s->slider.onValueChange = melodyTweak;
+    contourBox.onChange = [this]
+    {
+        if (! uiReady) return;
+        prj.contour = cm::Contour (juce::jlimit (0, cm::kNumContours - 1, contourBox.getSelectedId() - 1));
+        afterMelodySettingsChanged();
+    };
+    registerBox.onChange = [this]
+    {
+        if (! uiReady) return;
+        prj.setRegister (registerBox.getSelectedId() - 1);
+        afterMelodySettingsChanged();
+    };
+
+    ensembleBox.onChange = [this]
+    {
+        if (! uiReady) return;
+        prj.ensemble = cm::ensembleFromIndex (ensembleBox.getSelectedId() - 1);
+        refreshRoll();
+        refreshArrangeInfo();
+        restartPreviewIfPlaying();
+    };
+    polyBox.onChange = [this]
+    {
+        if (! uiReady) return;
+        prj.poly = cm::polyharmonyFromIndex (polyBox.getSelectedId() - 1);
+        refreshRoll();
+        refreshArrangeInfo();
+        restartPreviewIfPlaying();
+    };
 
     melodyBtn.onClick = [this]
     {
@@ -309,17 +373,6 @@ ChordMatePanel::ChordMatePanel (ChordMateProcessor& p)
         refreshRoll();
         proc.playAll();
     };
-    resolveToggle.onClick = [this]
-    {
-        prj.resolveEnd = resolveToggle.getToggleState();
-        if (! prj.melody.empty())
-        {
-            prj.generateMelodyNow();
-            refreshRoll();
-            restartPreviewIfPlaying();
-        }
-    };
-
     recBtn.onClick = [this]
     {
         const bool on = recBtn.getToggleState();
@@ -383,8 +436,9 @@ void ChordMatePanel::syncControlsFromProject()
 
     rootBox.setSelectedId (prj.key.root + 1, juce::dontSendNotification);
     scaleBox.setSelectedId ((int) prj.key.scale + 1, juce::dontSendNotification);
-    seventhsToggle.setToggleState (prj.sevenths, juce::dontSendNotification);
-    presetBox.setSelectedId (juce::jlimit (0, (int) cm::presetsFor (prj.key).size() - 1, prj.presetIndex) + 1,
+    genreBox.setSelectedId ((int) prj.genre + 1, juce::dontSendNotification);
+    colourBox.setSelectedId (juce::jlimit (0, cm::kNumColours - 1, prj.colour) + 1, juce::dontSendNotification);
+    presetBox.setSelectedId (juce::jlimit (0, juce::jmax (0, presetBox.getNumItems() - 1), prj.presetIndex) + 1,
                              juce::dontSendNotification);
     lengthBox.setSelectedId (juce::jlimit (2, cm::kMaxChords, prj.progLength), juce::dontSendNotification);
 
@@ -395,11 +449,13 @@ void ChordMatePanel::syncControlsFromProject()
     bassToggle.setToggleState (prj.bass, juce::dontSendNotification);
     adventure.slider.setValue (prj.adventure, juce::dontSendNotification);
 
-    density.slider.setValue (prj.density, juce::dontSendNotification);
-    leaps.slider.setValue (prj.leaps, juce::dontSendNotification);
-    lowNote.slider.setValue (prj.lowNote, juce::dontSendNotification);
-    highNote.slider.setValue (prj.highNote, juce::dontSendNotification);
-    resolveToggle.setToggleState (prj.resolveEnd, juce::dontSendNotification);
+    energy.slider.setValue (prj.density, juce::dontSendNotification);
+    movement.slider.setValue (prj.leaps, juce::dontSendNotification);
+    tension.slider.setValue (prj.tension, juce::dontSendNotification);
+    contourBox.setSelectedId ((int) prj.contour + 1, juce::dontSendNotification);
+    registerBox.setSelectedId (prj.registerIndex + 1, juce::dontSendNotification);
+    ensembleBox.setSelectedId ((int) prj.ensemble + 1, juce::dontSendNotification);
+    polyBox.setSelectedId ((int) prj.poly + 1, juce::dontSendNotification);
 
     int qId = 4;
     for (int i = 0; i < 5; ++i) if (kQuantValues[i] == prj.quantGrid) qId = i + 1;
@@ -419,8 +475,8 @@ void ChordMatePanel::rebuildPresetBox()
     const bool was = uiReady;
     uiReady = false;
     presetBox.clear (juce::dontSendNotification);
-    const auto& list = cm::presetsFor (prj.key);
-    for (size_t i = 0; i < list.size(); ++i) presetBox.addItem (U8 (list[i].name), (int) i + 1);
+    const auto list = cm::presetNames (prj.genre, prj.key);
+    for (size_t i = 0; i < list.size(); ++i) presetBox.addItem (U8 (list[i]), (int) i + 1);
     prj.presetIndex = juce::jlimit (0, (int) list.size() - 1, prj.presetIndex);
     presetBox.setSelectedId (prj.presetIndex + 1, juce::dontSendNotification);
     uiReady = was;
@@ -433,6 +489,7 @@ void ChordMatePanel::refreshAll()
     refreshSuggestions();
     refreshRoll();
     refreshCaptureInfo();
+    refreshArrangeInfo();
 }
 
 void ChordMatePanel::refreshSlots()
@@ -466,7 +523,7 @@ void ChordMatePanel::refreshSlots()
 cm::Chord ChordMatePanel::suggestionSource() const
 {
     if (prj.progression.empty())
-        return cm::chordAtDegree (prj.key, 4, prj.sevenths, true);
+        return coloured (cm::chordAtDegree (prj.key, 4, false, true));
     const int idx = (selectedSlot >= 0 && selectedSlot < (int) prj.progression.size())
                         ? selectedSlot : (int) prj.progression.size() - 1;
     return prj.progression[(size_t) idx];
@@ -475,7 +532,7 @@ cm::Chord ChordMatePanel::suggestionSource() const
 void ChordMatePanel::refreshSuggestions()
 {
     const auto from = suggestionSource();
-    currentSuggestions = cm::suggestNext (from, prj.key, prj.sevenths, prj.adventure, (int) sugg.size());
+    currentSuggestions = cm::suggestNext (from, prj.key, prj.sevenths, prj.adventure, (int) sugg.size(), prj.genre, prj.colour);
 
     if (prj.progression.empty())
         suggTitle.setText (U8 ("Per iniziare, prova uno di questi accordi (clic = aggiungi):"), juce::dontSendNotification);
@@ -516,6 +573,31 @@ void ChordMatePanel::refreshCaptureInfo()
                      juce::dontSendNotification);
 }
 
+void ChordMatePanel::refreshArrangeInfo()
+{
+    juce::String parts;
+    for (const auto& p : prj.arrangement())
+        parts += (parts.isEmpty() ? "" : ", ") + U8 (p.name);
+    partsInfo.setText (parts.isEmpty() ? U8 ("Nessun accordo da arrangiare") : U8 ("Parti: ") + parts,
+                       juce::dontSendNotification);
+
+    juce::String chords;
+    for (const auto& n : prj.polychordNames())
+        chords += (chords.isEmpty() ? "" : U8 ("  ·  ")) + U8 (n);
+    const auto label = prj.poly == cm::Polyharmony::UpperTriad ? U8 ("Poliaccordi: ")
+                     : prj.poly == cm::Polyharmony::Extensions ? U8 ("Con le estensioni: ")
+                                                               : U8 ("Accordi: ");
+    polyInfo.setText (chords.isEmpty() ? juce::String() : label + chords, juce::dontSendNotification);
+}
+
+void ChordMatePanel::afterMelodySettingsChanged()
+{
+    if (prj.melody.empty()) return;
+    prj.generateMelodyNow();
+    refreshRoll();
+    restartPreviewIfPlaying();
+}
+
 void ChordMatePanel::restartPreviewIfPlaying()
 {
     if (proc.isPreviewPlaying()) proc.playAll();
@@ -538,6 +620,24 @@ void ChordMatePanel::onRootChanged (int newRoot)
     prj.key.root = newRoot;
     for (auto& c : prj.progression) c.root = ((c.root + delta) % 12 + 12) % 12;   // trasporta la progressione
     afterProgressionChanged();
+}
+
+void ChordMatePanel::onGenreChanged (int index)
+{
+    prj.genre = cm::genreFromIndex (index);
+    prj.applyGenreDefaults();      // colore, ritmo, basso, macro della melodia, ensemble e poliarmonia del genere
+    rebuildPresetBox();
+    if (! prj.melody.empty()) prj.generateMelodyNow();
+    syncControlsFromProject();
+    refreshAll();
+    hint.setText (U8 (cm::genreProfile (prj.genre).description) + U8 (" «Applica preset» per un giro tipico."),
+                  juce::dontSendNotification);
+    restartPreviewIfPlaying();
+}
+
+cm::Chord ChordMatePanel::coloured (const cm::Chord& c) const
+{
+    return cm::adaptColour (c, prj.key, prj.colour);
 }
 
 void ChordMatePanel::insertChord (const cm::Chord& c, bool replace)
@@ -593,17 +693,6 @@ void ChordMatePanel::slotMenu (int index)
     });
 }
 
-void ChordMatePanel::convertSevenths()
-{
-    for (auto& c : prj.progression)
-    {
-        const int deg = cm::degreeOf (c.root, prj.key);
-        if (deg < 0 || ! cm::isDiatonicChord (c, prj.key)) continue;
-        const bool raised = deg == 4 && (c.quality == cm::Quality::Maj || c.quality == cm::Quality::Dom7);
-        c = cm::chordAtDegree (prj.key, deg, prj.sevenths, raised);
-    }
-}
-
 juce::File ChordMatePanel::writeMidi (const std::vector<cm::Note>& notes, int lengthTicks, const juce::String& label)
 {
     auto dir = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("ChordMate");
@@ -615,6 +704,35 @@ juce::File ChordMatePanel::writeMidi (const std::vector<cm::Note>& notes, int le
                                                        + juce::String ((int) std::lround (bpm)) + "bpm") + ".mid";
     auto file = dir.getChildFile (name);
     const auto bytes = cm::buildMidiFile (notes, bpm, lengthTicks, ("ChordMate " + label).toStdString());
+    return file.replaceWithData (bytes.data(), bytes.size()) ? file : juce::File();
+}
+
+juce::File ChordMatePanel::writeArrangementMidi()
+{
+    auto dir = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("ChordMate");
+    if (! dir.createDirectory()) return {};
+
+    std::vector<cm::MidiTrack> tracks;
+    int channel = 0;
+    for (auto& p : prj.arrangement())
+    {
+        tracks.push_back ({ p.name, p.channel, p.program, p.notes });
+        channel = std::max (channel, p.channel + 1);
+    }
+    if (! prj.melody.empty())
+    {
+        if (channel == 9) ++channel;
+        const bool orchestral = prj.ensemble != cm::Ensemble::Piano;
+        tracks.push_back ({ "Melodia", std::min (channel, 15), orchestral ? 73 : 80, prj.melody });
+    }
+
+    const double bpm = proc.hostBpm();
+    const auto keyStr = U8 (cm::keyName (prj.key)).replaceCharacter (' ', '_').replace ("#", "s");
+    const auto ens = U8 (cm::ensembleName (prj.ensemble)).replaceCharacter (' ', '_').replaceCharacter ('/', '-');
+    const auto name = juce::File::createLegalFileName ("ChordMate_Arrangiamento_" + ens + "_" + keyStr + "_"
+                                                       + juce::String ((int) std::lround (bpm)) + "bpm") + ".mid";
+    auto file = dir.getChildFile (name);
+    const auto bytes = cm::buildMidiFileMulti (tracks, bpm, prj.lengthTicks());
     return file.replaceWithData (bytes.data(), bytes.size()) ? file : juce::File();
 }
 
@@ -741,6 +859,7 @@ void ChordMatePanel::paint (juce::Graphics& g)
     };
     header (secProg, U8 ("PROGRESSIONE"));
     header (secMelody, U8 ("MELODIA"));
+    header (secArrange, U8 ("ARRANGIAMENTO E POLIARMONIA"));
     header (secCapture, U8 ("CATTURA MIDI"));
     header (secExport, U8 ("ESPORTA IN LIVE"));
 }
@@ -763,17 +882,17 @@ void ChordMatePanel::resized()
     // barra superiore
     {
         auto r = take (36, 8);
-        volume.setBounds (r.removeFromRight (130));
+        volume.setBounds (r.removeFromRight (120));
         r.removeFromRight (6);
-        playBtn.setBounds (r.removeFromRight (130).reduced (0, 3));
+        playBtn.setBounds (r.removeFromRight (124).reduced (0, 3));
         r.removeFromRight (6);
-        bpmLabel.setBounds (r.removeFromRight (90));
-        put (r, title, 130);
-        put (r, rootBox, 76, 5);
-        put (r, scaleBox, 170, 5);
-        put (r, seventhsToggle, 150, 5);
-        rootBox.setSize (rootBox.getWidth(), 26);
-        scaleBox.setSize (scaleBox.getWidth(), 26);
+        bpmLabel.setBounds (r.removeFromRight (70));
+        put (r, title, 110);
+        put (r, rootBox, 74, 5);
+        put (r, scaleBox, 168, 5);
+        put (r, genreBox, 200, 5);
+        put (r, colourBox, 150, 5);
+        for (auto* c : { &rootBox, &scaleBox, &genreBox, &colourBox }) c->setSize (c->getWidth(), 26);
     }
 
     // ascolto live
@@ -792,10 +911,11 @@ void ChordMatePanel::resized()
     secProg = take (18, 4);
     {
         auto r = take (28, 6);
-        put (r, presetBox, 300);
+        put (r, presetBox, 380);
         put (r, applyPresetBtn, 110);
         put (r, lengthBox, 110);
-        put (r, randomBtn, 140);
+        put (r, randomBtn, 130);
+        put (r, reharmBtn, 120);
         put (r, clearBtn, 80);
     }
     {
@@ -821,14 +941,24 @@ void ChordMatePanel::resized()
     secMelody = take (18, 4);
     {
         auto r = take (36, 6);
-        put (r, density, 170);
-        put (r, leaps, 170);
-        put (r, lowNote, 130);
-        put (r, highNote, 130);
+        put (r, energy, 180);
+        put (r, movement, 180);
+        put (r, tension, 180);
+        put (r, contourBox, 180, 8);
+        put (r, registerBox, 170, 8);
         put (r, melodyBtn, 140, 6);
-        resolveToggle.setBounds (r.withTrimmedTop (6));
     }
     roll.setBounds (take (124, 8));
+
+    // arrangiamento
+    secArrange = take (18, 4);
+    {
+        auto r = take (28, 4);
+        put (r, ensembleBox, 220);
+        put (r, polyBox, 260);
+        partsInfo.setBounds (r);
+    }
+    polyInfo.setBounds (take (18, 6));
 
     // cattura
     secCapture = take (18, 4);
@@ -849,9 +979,10 @@ void ChordMatePanel::resized()
     secExport = take (18, 2);
     {
         auto r = take (46, 0);
-        put (r, dragChords, 230);
-        put (r, dragMelody, 230);
-        put (r, dragCapture, 230);
+        put (r, dragChords, 200);
+        put (r, dragMelody, 200);
+        put (r, dragArrangement, 220);
+        put (r, dragCapture, 200);
         hint.setBounds (r);
     }
 }

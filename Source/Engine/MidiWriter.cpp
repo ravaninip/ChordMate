@@ -88,4 +88,83 @@ std::vector<uint8_t> buildMidiFile (const std::vector<Note>& notes, double bpm, 
     return file;
 }
 
+
+namespace
+{
+void appendChunk (std::vector<uint8_t>& file, const std::vector<uint8_t>& trk)
+{
+    file.insert (file.end(), { 'M', 'T', 'r', 'k' });
+    write32 (file, uint32_t (trk.size()));
+    file.insert (file.end(), trk.begin(), trk.end());
+}
+
+void metaText (std::vector<uint8_t>& trk, uint8_t type, const std::string& s)
+{
+    trk.push_back (0x00); trk.push_back (0xFF); trk.push_back (type);
+    writeVlq (trk, uint32_t (s.size()));
+    trk.insert (trk.end(), s.begin(), s.end());
+}
+}
+
+std::vector<uint8_t> buildMidiFileMulti (const std::vector<MidiTrack>& tracks, double bpm, int lengthTicks)
+{
+    std::vector<uint8_t> file;
+    file.insert (file.end(), { 'M', 'T', 'h', 'd' });
+    write32 (file, 6);
+    write16 (file, 1);                                   // formato 1
+    write16 (file, uint16_t (tracks.size() + 1));
+    write16 (file, uint16_t (kPPQ));
+
+    int endTick = std::max (0, lengthTicks);
+    for (const auto& t : tracks)
+        for (const auto& n : t.notes) endTick = std::max (endTick, std::max (0, n.startTick) + std::max (1, n.lengthTick));
+
+    // traccia 0: tempo e metrica
+    {
+        std::vector<uint8_t> trk;
+        const uint32_t tempo = uint32_t (std::lround (60000000.0 / std::clamp (bpm, 20.0, 400.0)));
+        trk.push_back (0x00); trk.push_back (0xFF); trk.push_back (0x51); trk.push_back (0x03);
+        trk.push_back (uint8_t (tempo >> 16)); trk.push_back (uint8_t (tempo >> 8)); trk.push_back (uint8_t (tempo));
+        trk.push_back (0x00); trk.push_back (0xFF); trk.push_back (0x58); trk.push_back (0x04);
+        trk.push_back (4); trk.push_back (2); trk.push_back (24); trk.push_back (8);
+        writeVlq (trk, uint32_t (endTick));
+        trk.push_back (0xFF); trk.push_back (0x2F); trk.push_back (0x00);
+        appendChunk (file, trk);
+    }
+
+    for (const auto& t : tracks)
+    {
+        const uint8_t ch = uint8_t (std::clamp (t.channel, 0, 15));
+        std::vector<Ev> evs;
+        for (const auto& n : t.notes)
+        {
+            const uint8_t p = uint8_t (std::clamp (n.pitch, 0, 127));
+            const uint8_t v = uint8_t (std::clamp (n.velocity, 1, 127));
+            const int start = std::max (0, n.startTick);
+            evs.push_back ({ start, 1, uint8_t (0x90 | ch), p, v });
+            evs.push_back ({ start + std::max (1, n.lengthTick), 0, uint8_t (0x80 | ch), p, 0 });
+        }
+        std::stable_sort (evs.begin(), evs.end(), [] (const Ev& a, const Ev& b)
+                          { return a.tick != b.tick ? a.tick < b.tick : a.order < b.order; });
+
+        std::vector<uint8_t> trk;
+        if (! t.name.empty()) metaText (trk, 0x03, t.name);
+        if (t.program >= 0)
+        {
+            trk.push_back (0x00); trk.push_back (uint8_t (0xC0 | ch)); trk.push_back (uint8_t (std::clamp (t.program, 0, 127)));
+        }
+        int cursor = 0;
+        for (const auto& e : evs)
+        {
+            writeVlq (trk, uint32_t (e.tick - cursor));
+            trk.push_back (e.status); trk.push_back (e.d1); trk.push_back (e.d2);
+            cursor = e.tick;
+        }
+        writeVlq (trk, uint32_t (std::max (0, endTick - cursor)));
+        trk.push_back (0xFF); trk.push_back (0x2F); trk.push_back (0x00);
+        appendChunk (file, trk);
+    }
+    return file;
+}
+
 } // namespace cm

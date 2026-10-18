@@ -42,7 +42,7 @@ Requisiti: Windows 10/11 a 64 bit, internet, circa 8 GB liberi.
    cd C:\dev\ChordMate
    powershell -ExecutionPolicy Bypass -File .\build-windows.ps1
    ```
-   Lo script controlla i prerequisiti, scarica JUCE, compila, esegue i test del motore (devono dire 272 controlli, 0 falliti) e copia il plugin:
+   Lo script controlla i prerequisiti, scarica JUCE, compila, esegue i test del motore (devono dire 0 falliti) e copia il plugin:
    - in `C:\Program Files\Common Files\VST3` se PowerShell è avviato come amministratore;
    - altrimenti in `%LOCALAPPDATA%\Programs\Common\VST3`.
 

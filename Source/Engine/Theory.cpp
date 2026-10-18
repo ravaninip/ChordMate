@@ -1,4 +1,5 @@
 #include "Theory.h"
+#include "Style.h"
 
 #include <algorithm>
 #include <cmath>
@@ -34,11 +35,35 @@ const ScaleInfo kScales[kNumScales] = {
 const std::vector<int> kQualityIntervals[kNumQualities] = {
     { 0, 4, 7 }, { 0, 3, 7 }, { 0, 3, 6 }, { 0, 4, 8 }, { 0, 2, 7 }, { 0, 5, 7 },
     { 0, 4, 7, 11 }, { 0, 4, 7, 10 }, { 0, 3, 7, 10 }, { 0, 3, 6, 10 }, { 0, 3, 6, 9 }, { 0, 3, 7, 11 },
+    { 0, 4, 7, 14 }, { 0, 3, 7, 14 }, { 0, 4, 7, 11, 14 }, { 0, 3, 7, 10, 14 }, { 0, 4, 7, 10, 14 },
+    { 0, 4, 7, 9 }, { 0, 3, 7, 9 }, { 0, 5, 7, 10 }, { 0, 4, 7, 10, 13 },
 };
 
 const char* const kQualitySuffix[kNumQualities] = {
     "", "m", "dim", "aug", "sus2", "sus4", "maj7", "7", "m7", "m7b5", "dim7", "m(maj7)",
+    "add9", "m(add9)", "maj9", "m9", "9", "6", "m6", "7sus4", "7b9",
 };
+
+// nota nella scala "parente" a 7 note (per le pentatoniche: la scala da cui derivano)
+bool inParentScale (int pc, const Key& k)
+{
+    return inScale (pc, Key { k.root, harmonicParent (k.scale) });
+}
+
+// riduzione a triade di qualsiasi qualità
+Quality triadOf (Quality q)
+{
+    switch (q)
+    {
+        case Quality::Min: case Quality::Min7: case Quality::MinMaj7: case Quality::MinAdd9:
+        case Quality::Min9: case Quality::Min6:                       return Quality::Min;
+        case Quality::Dim: case Quality::HalfDim7: case Quality::Dim7: return Quality::Dim;
+        case Quality::Aug:                                            return Quality::Aug;
+        case Quality::Sus2:                                           return Quality::Sus2;
+        case Quality::Sus4: case Quality::Dom7Sus4:                   return Quality::Sus4;
+        default:                                                      return Quality::Maj;
+    }
+}
 
 Quality classify (int third, int fifth, int seventh)
 {
@@ -56,12 +81,6 @@ Quality classify (int third, int fifth, int seventh)
     if (third == 3 && fifth == 6) return Quality::Dim;
     if (third == 4 && fifth == 8) return Quality::Aug;
     return Quality::Maj;
-}
-
-bool isMinorQuality (Quality q)
-{
-    return q == Quality::Min || q == Quality::Min7 || q == Quality::Dim || q == Quality::HalfDim7
-           || q == Quality::Dim7 || q == Quality::MinMaj7;
 }
 
 int majorEquivalentTonic (const Key& k)
@@ -129,15 +148,38 @@ const Extra kMinorExtras[] = {
 struct Candidate
 {
     Chord chord;
-    int degree = -1;
-    const Extra* extra = nullptr;
+    int degree = -1;          // grado diatonico, -1 = accordo "colore"
+    bool isExtra = false;
+    int fromMask = 0;
+    double weight = 0;
+    bool colour = false;
+    const char* reason = nullptr;
 };
 
-std::vector<Candidate> buildCandidates (const Key& k, bool sevenths)
+int colourOf (bool sevenths, int colour) { return colour >= 0 ? std::clamp (colour, 0, kNumColours - 1) : (sevenths ? 1 : 0); }
+
+std::vector<Candidate> buildCandidates (const Key& k, bool sevenths, Genre genre = Genre::Universal, int colour = -1)
 {
+    const int col = colourOf (sevenths, colour);
+    const bool sev = col >= 1;
     std::vector<Candidate> out;
     for (int d = 0; d < 7; ++d)
-        out.push_back ({ chordAtDegree (k, d, sevenths, false), d, nullptr });
+    {
+        Chord c = chordAtDegree (k, d, sev, false);
+        if (col == 2) c = adaptColour (c, k, 2);
+        out.push_back ({ c, d, false, 0, 0, false, nullptr });
+    }
+
+    auto addExtra = [&] (const Chord& c, int fromMask, double weight, bool isColour, const char* reason)
+    {
+        for (auto& o : out)
+            if (o.chord == c)
+            {
+                if (o.isExtra) { o.fromMask |= fromMask; o.weight = std::max (o.weight, weight); }
+                return;
+            }
+        out.push_back ({ c, -1, true, fromMask, weight, isColour, reason });
+    };
 
     const bool minorFam = isMinorFamily (k.scale);
     const Extra* ex = minorFam ? kMinorExtras : kMajorExtras;
@@ -145,12 +187,26 @@ std::vector<Candidate> buildCandidates (const Key& k, bool sevenths)
 
     for (int i = 0; i < n; ++i)
     {
-        Chord c { mod12 (k.root + ex[i].offset), sevenths ? ex[i].seventh : ex[i].triad };
-        bool dup = false;
-        for (auto& o : out) if (o.chord == c) dup = true;
-        if (! dup) out.push_back ({ c, -1, &ex[i] });
+        Chord c { mod12 (k.root + ex[i].offset), sev ? ex[i].seventh : ex[i].triad };
+        if (col == 2) c = adaptColour (c, k, 2);
+        addExtra (c, ex[i].fromMask, ex[i].weight, ex[i].colour, ex[i].reason);
+    }
+
+    const auto& gp = genreProfile (genre);
+    for (const auto& ge : (minorFam ? gp.minorExtras : gp.majorExtras))
+    {
+        Chord c;
+        if (! parseRoman (ge.roman, k, c)) continue;
+        addExtra (adaptColour (c, k, col), ge.fromMask, ge.weight, true, ge.reason);
     }
     return out;
+}
+
+Candidate candidateFor (const Chord& c, const Key& k)
+{
+    const int d = degreeOf (c.root, k);
+    if (d >= 0 && isDiatonicChord (c, k)) return { c, d, false, 0, 0, false, nullptr };
+    return { c, -1, true, 0x7F, 3, false, "" };
 }
 
 const char* degreeReason (int deg, bool minorFam)
@@ -176,48 +232,51 @@ const char* degreeReason (int deg, bool minorFam)
 }
 
 // peso (0 = escluso) di una transizione from -> candidato, con motivazione
-double weightFrom (const Chord& from, const Candidate& c, const Key& k, double adventure, std::string* reason)
+double weightFrom (const Chord& from, const Candidate& c, const Key& k, double adventure, std::string* reason,
+                   Genre genre = Genre::Universal)
 {
     if (from == c.chord) return 0.0;
 
+    const auto& gp = genreProfile (genre);
     const bool minorFam = isMinorFamily (k.scale);
     const int fromDeg = degreeOf (from.root, k);
     const double adv = std::clamp (adventure, 0.0, 1.0);
     const bool resolves = c.chord.root == mod12 (from.root + 5) || c.chord.root == mod12 (from.root - 1);
     const bool fromDiatonic = isDiatonicChord (from, k);
+    const bool fromDomLike = from.quality == Quality::Maj || isDominantQuality (from.quality);
 
     double w = 0.0;
     const char* why = nullptr;
-    std::string whyOwn;
 
-    if (fromDiatonic || ((from.quality != Quality::Dom7 && from.quality != Quality::Maj) && fromDeg >= 0))
+    if (fromDiatonic || (! fromDomLike && fromDeg >= 0))
     {
-        if (c.extra == nullptr)
+        if (! c.isExtra)
         {
             w = (minorFam ? kMinorT : kMajorT)[fromDeg][c.degree];
             if (minorFam && c.degree == 4 && harmonicParent (k.scale) == ScaleType::NaturalMinor)
                 w = (w + 1) / 2.0;
+            w *= (minorFam ? gp.degreeMulMinor : gp.degreeMul)[size_t (c.degree)];
             why = degreeReason (c.degree, minorFam);
             if (fromDeg == 4 && c.degree == 0) why = "Cadenza perfetta V→I: risolve la tensione";
             else if (fromDeg == 4 && c.degree == 5 && ! minorFam) why = "Cadenza d'inganno V→vi: risoluzione a sorpresa";
             else if (fromDeg == 3 && c.degree == 0) why = "Cadenza plagale IV→I: risoluzione morbida";
         }
-        else if ((c.extra->fromMask >> fromDeg) & 1)
+        else if ((c.fromMask >> fromDeg) & 1)
         {
-            w = c.extra->weight * (c.extra->colour ? 1.6 * adv : 1.0);
-            why = c.extra->reason;
+            w = c.weight * (c.colour ? 1.6 * adv * gp.colourMul : 1.0);
+            why = c.reason;
         }
     }
-    else if (from.quality == Quality::Dom7 || from.quality == Quality::Maj)
+    else if (fromDomLike)
     {
         // accordo non diatonico di tipo dominante: ci si aspetta la risoluzione
-        if (c.extra == nullptr)
+        if (! c.isExtra)
         {
             if (resolves) { w = 10; why = "Risoluzione: la dominante scende di quinta"; }
             else          { w = 1.0; why = degreeReason (c.degree, minorFam); }
         }
     }
-    else if (c.extra == nullptr)
+    else if (! c.isExtra)
     {
         w = 2.5;
         why = degreeReason (c.degree, minorFam);
@@ -338,8 +397,146 @@ bool isDiatonicChord (const Chord& c, const Key& k)
 {
     const int d = degreeOf (c.root, k);
     if (d < 0) return false;
-    return c == chordAtDegree (k, d, false) || c == chordAtDegree (k, d, true)
-        || c == chordAtDegree (k, d, false, true) || c == chordAtDegree (k, d, true, true);
+    if (c == chordAtDegree (k, d, false) || c == chordAtDegree (k, d, true)
+        || c == chordAtDegree (k, d, false, true) || c == chordAtDegree (k, d, true, true))
+        return true;
+    if (int (c.quality) < kNumBasicQualities) return false;
+    // accordi estesi (9ª, 6ª, add9...): diatonici se la triade lo è e le note aggiunte sono in scala
+    const Chord tri { c.root, triadOf (c.quality) };
+    if (tri != chordAtDegree (k, d, false) && tri != chordAtDegree (k, d, false, true)) return false;
+    for (int iv : qualityIntervals (c.quality))
+        if (iv > 7 && ! inParentScale (c.root + iv, k)) return false;
+    return true;
+}
+
+Genre genreFromIndex (int i) { return Genre (std::clamp (i, 0, kNumGenres - 1)); }
+
+bool isMinorQuality (Quality q)
+{
+    return triadOf (q) == Quality::Min || triadOf (q) == Quality::Dim;
+}
+
+bool isDominantQuality (Quality q)
+{
+    return q == Quality::Dom7 || q == Quality::Dom9 || q == Quality::Dom7b9 || q == Quality::Dom7Sus4;
+}
+
+Chord adaptColour (const Chord& c, const Key& k, int colour)
+{
+    colour = std::clamp (colour, 0, kNumColours - 1);
+    const int r = c.root;
+    auto in = [&] (int iv) { return inParentScale (r + iv, k); };
+    Chord out = c;
+
+    if (colour == 0)
+    {
+        out.quality = triadOf (c.quality);
+        return out;
+    }
+
+    // livello 1: settima (le dominanti restano dominanti, le altre prendono la settima della scala)
+    switch (c.quality)
+    {
+        case Quality::Maj: case Quality::Add9: case Quality::Maj9: case Quality::Six:
+            out.quality = (c.quality == Quality::Maj9 || in (11)) ? Quality::Maj7 : Quality::Dom7; break;
+        case Quality::Min: case Quality::MinAdd9: case Quality::Min9: case Quality::Min6:
+            out.quality = (in (10) || ! in (11)) ? Quality::Min7 : Quality::MinMaj7; break;
+        case Quality::Dim:
+            out.quality = in (10) ? Quality::HalfDim7 : Quality::Dim7; break;
+        case Quality::Sus4:
+            out.quality = in (10) ? Quality::Dom7Sus4 : Quality::Sus4; break;
+        case Quality::Dom9: case Quality::Dom7b9:
+            out.quality = Quality::Dom7; break;
+        default: break;
+    }
+    if (colour == 1)
+    {
+        // a livello 1 le "colorazioni" esplicite (6, add9) tornano settime; il resto è già a posto
+        return out;
+    }
+
+    // livello 2: le qualità di colore esplicite restano; le settime prendono la 9ª se è in scala
+    switch (c.quality)
+    {
+        case Quality::Six: case Quality::Min6: case Quality::Add9: case Quality::MinAdd9:
+        case Quality::Maj9: case Quality::Min9: case Quality::Dom9: case Quality::Dom7b9:
+            return c;
+        default: break;
+    }
+    switch (out.quality)
+    {
+        case Quality::Maj7: if (in (2)) out.quality = Quality::Maj9; break;
+        case Quality::Min7: if (in (2)) out.quality = Quality::Min9; break;
+        case Quality::Dom7:
+            if (in (2)) out.quality = Quality::Dom9;
+            else if (in (1)) out.quality = Quality::Dom7b9;
+            break;
+        default: break;
+    }
+    return out;
+}
+
+bool parseRoman (const std::string& token, const Key& k, Chord& out)
+{
+    size_t i = 0;
+    int acc = 0;
+    for (;;)
+    {
+        if (token.compare (i, 1, "b") == 0 && i + 1 < token.size() && (token[i + 1] == 'I' || token[i + 1] == 'V'
+                                                                       || token[i + 1] == 'i' || token[i + 1] == 'v'))
+        { --acc; i += 1; }
+        else if (token.compare (i, 1, "#") == 0) { ++acc; i += 1; }
+        else if (token.compare (i, 3, "\xE2\x99\xAD") == 0) { --acc; i += 3; }   // ♭
+        else if (token.compare (i, 3, "\xE2\x99\xAF") == 0) { ++acc; i += 3; }   // ♯
+        else break;
+    }
+
+    static const char* numerals[7] = { "VII", "III", "IV", "VI", "II", "V", "I" };
+    static const int offsets[7] = { 11, 4, 5, 9, 2, 7, 0 };
+    int offset = -1;
+    bool lower = false;
+    for (int n = 0; n < 7 && offset < 0; ++n)
+    {
+        const std::string num = numerals[n];
+        if (token.size() < i + num.size()) continue;
+        bool up = true, low = true;
+        for (size_t j = 0; j < num.size(); ++j)
+        {
+            const char ch = token[i + j];
+            up = up && ch == num[j];
+            low = low && ch == char (num[j] + ('a' - 'A'));
+        }
+        if (up || low)
+        {
+            offset = offsets[n];
+            lower = low;
+            i += num.size();
+        }
+    }
+    if (offset < 0) return false;
+
+    const std::string s = token.substr (i);
+    Quality q;
+    if      (s.empty())                                              q = lower ? Quality::Min : Quality::Maj;
+    else if (s == "7")                                               q = lower ? Quality::Min7 : Quality::Dom7;
+    else if (s == "maj7")                                            q = lower ? Quality::MinMaj7 : Quality::Maj7;
+    else if (s == "(maj7)")                                          q = Quality::MinMaj7;
+    else if (s == "\xC2\xB0" || s == "o" || s == "dim")              q = Quality::Dim;          // °
+    else if (s == "\xC2\xB0" "7" || s == "o7" || s == "dim7")        q = Quality::Dim7;
+    else if (s == "\xC3\xB8" "7" || s == "\xC3\xB8" || s == "m7b5")  q = Quality::HalfDim7;     // ø
+    else if (s == "+" || s == "aug")                                 q = Quality::Aug;
+    else if (s == "sus2")                                            q = Quality::Sus2;
+    else if (s == "sus4" || s == "sus")                              q = Quality::Sus4;
+    else if (s == "7sus4" || s == "7sus")                            q = Quality::Dom7Sus4;
+    else if (s == "add9")                                            q = lower ? Quality::MinAdd9 : Quality::Add9;
+    else if (s == "maj9")                                            q = Quality::Maj9;
+    else if (s == "9")                                               q = lower ? Quality::Min9 : Quality::Dom9;
+    else if (s == "6")                                               q = lower ? Quality::Min6 : Quality::Six;
+    else if (s == "7b9")                                             q = Quality::Dom7b9;
+    else return false;
+
+    out = { mod12 (k.root + offset + acc), q };
+    return true;
 }
 
 std::string romanNumeral (const Chord& c, const Key& k)
@@ -365,6 +562,12 @@ std::string romanNumeral (const Chord& c, const Key& k)
         case Quality::HalfDim7: base += "ø7"; break;
         case Quality::Dim7:     base += "°7"; break;
         case Quality::MinMaj7:  base += "(maj7)"; break;
+        case Quality::Add9:     case Quality::MinAdd9: base += "add9"; break;
+        case Quality::Maj9:     base += "maj9"; break;
+        case Quality::Min9:     case Quality::Dom9: base += "9"; break;
+        case Quality::Six:      case Quality::Min6: base += "6"; break;
+        case Quality::Dom7Sus4: base += "7sus4"; break;
+        case Quality::Dom7b9:   base += "7♭9"; break;
         default: break;
     }
     return base;
@@ -428,6 +631,7 @@ DetectedChord detectChord (uint16_t mask, int bass)
             int score = popcount (tmask) * 10 - extras * 4;
             if (root == bass) score += 5;
             if (q == int (Quality::Maj) || q == int (Quality::Min)) score += 1;
+            if (q >= kNumBasicQualities) score -= 1;              // a parità vincono le letture classiche
             if (score > bestScore)
             {
                 bestScore = score;
@@ -440,15 +644,16 @@ DetectedChord detectChord (uint16_t mask, int bass)
 }
 
 // ============================================================ suggerimenti
-std::vector<Suggestion> suggestNext (const Chord& from, const Key& k, bool sevenths, double adventure, int maxCount)
+std::vector<Suggestion> suggestNext (const Chord& from, const Key& k, bool sevenths, double adventure, int maxCount,
+                                     Genre genre, int colour)
 {
     std::vector<Suggestion> out;
-    for (const auto& c : buildCandidates (k, sevenths))
+    for (const auto& c : buildCandidates (k, sevenths, genre, colour))
     {
         std::string reason;
-        const double w = weightFrom (from, c, k, adventure, &reason);
+        const double w = weightFrom (from, c, k, adventure, &reason, genre);
         if (w >= 1.0)
-            out.push_back ({ c.chord, w, c.degree, c.extra != nullptr, reason });
+            out.push_back ({ c.chord, w, c.degree, c.isExtra, reason });
     }
     std::stable_sort (out.begin(), out.end(), [] (const Suggestion& a, const Suggestion& b) { return a.score > b.score; });
     if (int (out.size()) > maxCount) out.resize (size_t (std::max (0, maxCount)));
@@ -493,12 +698,14 @@ std::vector<Chord> generateProgression (const ProgressionOptions& o)
 {
     const int length = std::clamp (o.length, 1, kMaxChords);
     const double adv = std::clamp (o.adventure, 0.0, 1.0);
-    const auto cands = buildCandidates (o.key, o.sevenths);
+    const int col = colourOf (o.sevenths, o.colour);
+    const auto cands = buildCandidates (o.key, o.sevenths, o.genre, col);
     Rng rng (o.seed);
 
     std::vector<Chord> out;
-    out.push_back (chordAtDegree (o.key, 0, o.sevenths, true));
-    const Candidate tonic { out[0], 0, nullptr };
+    out.push_back (chordAtDegree (o.key, 0, col >= 1, true));
+    if (col == 2) out[0] = adaptColour (out[0], o.key, 2);
+    const Candidate tonic { out[0], 0, false, 0, 0, false, nullptr };
 
     for (int i = 1; i < length; ++i)
     {
@@ -507,11 +714,11 @@ std::vector<Chord> generateProgression (const ProgressionOptions& o)
         double sum = 0;
         for (size_t j = 0; j < cands.size(); ++j)
         {
-            double w = weightFrom (cur, cands[j], o.key, adv, nullptr);
+            double w = weightFrom (cur, cands[j], o.key, adv, nullptr, o.genre);
             if (w < 1.0) continue;
             w = std::pow (w, 1.6 - adv);
             if (i == length - 1)   // ultimo accordo: preferisci chi riporta alla tonica
-                w *= 1.0 + weightFrom (cands[j].chord, tonic, o.key, adv, nullptr) / 5.0;
+                w *= 1.0 + weightFrom (cands[j].chord, tonic, o.key, adv, nullptr, o.genre) / 5.0;
             ws[j] = w;
             sum += w;
         }
@@ -527,6 +734,104 @@ std::vector<Chord> generateProgression (const ProgressionOptions& o)
         }
         out.push_back (cands[pick].chord);
     }
+    return out;
+}
+
+namespace
+{
+// funzione armonica: 0 = tonica, 1 = sottodominante, 2 = dominante
+int harmonicFunction (const Chord& c, const Key& k)
+{
+    const int off = mod12 (c.root - k.root);
+    const bool minorFam = isMinorFamily (k.scale);
+    if (isDominantQuality (c.quality) && off != 7 && off != 1) return 2;   // dominanti secondarie: spingono
+    switch (off)
+    {
+        case 0:  return 0;
+        case 2:  return 1;
+        case 3:  return minorFam ? 0 : 1;
+        case 4:  return isMinorQuality (c.quality) ? 0 : 2;
+        case 5:  return 1;
+        case 7:  return 2;
+        case 8:  return 1;
+        case 9:  return minorFam ? 1 : 0;
+        case 10: return minorFam ? 2 : 1;
+        case 11: return 2;
+        case 1:  return isDominantQuality (c.quality) ? 2 : 1;
+        default: return 1;
+    }
+}
+}
+
+std::vector<Chord> reharmonize (const std::vector<Chord>& chords, const Key& k, int colour, double adventure,
+                                Genre genre, uint32_t seed)
+{
+    std::vector<Chord> out = chords;
+    const int n = int (chords.size());
+    if (n < 3) return out;
+
+    const auto& gp = genreProfile (genre);
+    const double adv = std::clamp (adventure, 0.0, 1.0);
+    const int col = std::clamp (colour, 0, kNumColours - 1);
+    const auto cands = buildCandidates (k, col >= 1, genre, col);
+    Rng rng (seed);
+
+    auto domOf = [&] (int root)   // dominante (secondaria) di root, nel colore scelto
+    {
+        Chord c { mod12 (root + 7), Quality::Dom7 };
+        if (col == 0) c.quality = Quality::Maj;
+        else if (col == 2) c = adaptColour (c, k, 2);
+        return c;
+    };
+
+    bool changedAny = false;
+    std::vector<int> order;
+    for (int i = 1; i < n - 1; ++i) order.push_back (i);
+
+    for (int pass = 0; pass < 2 && ! changedAny; ++pass)
+        for (int i : order)
+        {
+            if (pass == 0 && rng.uni() > 0.4 + 0.45 * adv) continue;
+
+            const Chord prev = out[size_t (i - 1)], cur = out[size_t (i)], next = out[size_t (i + 1)];
+            const int fn = harmonicFunction (cur, k);
+            const Candidate nextC = candidateFor (next, k);
+
+            std::vector<std::pair<Chord, double>> opts;
+            for (const auto& c : cands)
+            {
+                if (c.chord == cur || c.chord == prev || c.chord == next) continue;
+                if (harmonicFunction (c.chord, k) != fn) continue;
+                double w = weightFrom (prev, c, k, adv, nullptr, genre) + weightFrom (c.chord, nextC, k, adv, nullptr, genre);
+                if (c.isExtra) w *= 0.4 + adv * gp.colourMul;
+                if (w > 0.5) opts.push_back ({ c.chord, w });
+            }
+            // dominante secondaria (o sostituto di tritono) che prepara l'accordo successivo
+            if (adv > 0.15 && mod12 (next.root - k.root) != 0 && triadOf (next.quality) != Quality::Dim)
+            {
+                const Chord d = domOf (next.root);
+                if (d != cur && d != prev) opts.push_back ({ d, 6.0 * adv * gp.colourMul + 1.0 });
+                if (gp.tritoneSubs && adv > 0.3)
+                {
+                    Chord t { mod12 (next.root + 1), col == 0 ? Quality::Maj : Quality::Dom7 };
+                    if (col == 2) t = adaptColour (t, k, 2);
+                    if (t != cur && t != prev) opts.push_back ({ t, 4.0 * adv * gp.colourMul });
+                }
+            }
+            if (opts.empty()) continue;
+
+            double sum = 0;
+            for (auto& o : opts) { o.second = std::pow (o.second, 1.3); sum += o.second; }
+            double r = rng.uni() * sum;
+            Chord pick = opts.back().first;
+            for (auto& o : opts)
+            {
+                r -= o.second;
+                if (r <= 0) { pick = o.first; break; }
+            }
+            out[size_t (i)] = pick;
+            changedAny = true;
+        }
     return out;
 }
 
@@ -616,7 +921,7 @@ std::vector<Note> renderChords (const std::vector<Chord>& chords, const RenderOp
         const auto& v = voicings[i];
         const int n = int (v.size());
 
-        if (o.bass)
+        if (o.bass && o.bassStyle == BassStyle::Sustained)
             out.push_back ({ 36 + chords[i].root, t0, slot, std::min (127, o.velocity + 4) });
 
         switch (o.style)
@@ -652,58 +957,305 @@ std::vector<Note> renderChords (const std::vector<Chord>& chords, const RenderOp
                 break;
         }
     }
+    if (o.bass && o.bassStyle != BassStyle::Sustained)
+    {
+        const auto b = renderBass (chords, o);
+        out.insert (out.end(), b.begin(), b.end());
+    }
+    std::stable_sort (out.begin(), out.end(), [] (const Note& a, const Note& b) { return a.startTick < b.startTick; });
+    return out;
+}
+
+// ============================================================ basso
+const char* bassStyleName (BassStyle s)
+{
+    switch (s)
+    {
+        case BassStyle::Sustained:  return "Basso tenuto";
+        case BassStyle::Root8:      return "Ottavi sulla fondamentale";
+        case BassStyle::RootFifth:  return "Fondamentale-quinta";
+        case BassStyle::Walking:    return "Walking";
+        case BassStyle::Syncopated: return "Sincopato";
+        case BassStyle::Octaves:    return "Ottave";
+    }
+    return "";
+}
+
+std::vector<Note> renderBass (const std::vector<Chord>& chords, const RenderOptions& o)
+{
+    std::vector<Note> out;
+    const int spc = std::max (1, o.stepsPerChord);
+    const int slot = spc * kStepTicks;
+    const int vel = std::min (127, o.velocity + 4);
+
+    // fondamentale nell'ottava più vicina alla precedente (Mi1..Mi2 circa)
+    int prevRoot = 36 + (chords.empty() ? 0 : chords[0].root);
+    auto rootNear = [&] (int pc, int ref)
+    {
+        int best = 28 + mod12 (pc - 28), bestD = 1000;
+        for (int p = best; p <= 52; p += 12)
+            if (std::abs (p - ref) < bestD) { bestD = std::abs (p - ref); best = p; }
+        return best;
+    };
+
+    for (size_t i = 0; i < chords.size(); ++i)
+    {
+        const int t0 = int (i) * slot;
+        const Chord& c = chords[i];
+        const int root = (o.bassStyle == BassStyle::Walking) ? rootNear (c.root, prevRoot) : 36 + c.root;
+        const int fifth = root + (triadOf (c.quality) == Quality::Dim ? 6 : (triadOf (c.quality) == Quality::Aug ? 8 : 7));
+        auto add = [&] (int pitch, int step, int len, int v)
+        {
+            if (step >= spc) return;
+            len = std::min (len, spc - step);
+            out.push_back ({ pitch, t0 + step * kStepTicks, std::max (1, int (len * kStepTicks * 0.9)), std::clamp (v, 1, 127) });
+        };
+
+        switch (o.bassStyle)
+        {
+            case BassStyle::Sustained:
+                out.push_back ({ root, t0, slot, vel });
+                break;
+
+            case BassStyle::Root8:
+                for (int s = 0; s < spc; s += 2) add (root, s, 2, vel - (s % 4 == 0 ? 0 : 14));
+                break;
+
+            case BassStyle::RootFifth:   // figura bossa / pop: R . . . . . 5 . | 5 . . . . . R .
+                for (int h = 0; h < spc; h += 16)
+                {
+                    add (root, h, 6, vel);
+                    add (fifth - 12 >= 28 ? fifth - 12 : fifth, h + 6, 2, vel - 12);
+                    add (fifth - 12 >= 28 ? fifth - 12 : fifth, h + 8, 6, vel - 6);
+                    add (root, h + 14, 2, vel - 14);
+                }
+                break;
+
+            case BassStyle::Syncopated:  // groove R&B / hip-hop
+                for (int h = 0; h < spc; h += 16)
+                {
+                    add (root, h, 3, vel);
+                    add (root, h + 3, 2, vel - 16);
+                    add (root + 12, h + 6, 2, vel - 10);
+                    add (root, h + 10, 3, vel - 4);
+                    add (fifth, h + 14, 2, vel - 14);
+                }
+                break;
+
+            case BassStyle::Octaves:     // ottave in ottavi (dance)
+                for (int s = 0; s < spc; s += 2) add (s % 4 == 0 ? root : root + 12, s, 2, vel - (s % 4 == 0 ? 0 : 8));
+                break;
+
+            case BassStyle::Walking:
+            {
+                // un quarto per tempo: fondamentale, note d'accordo/scala verso la prossima, avvicinamento cromatico
+                const int beats = std::max (1, spc / 4);
+                const int nextRoot = rootNear (chords[(i + 1) % chords.size()].root, root);
+                const auto pcs = chordPitchClasses (c);
+                int cur = root;
+                for (int b = 0; b < beats; ++b)
+                {
+                    int p;
+                    if (b == 0) p = root;
+                    else if (b == beats - 1) p = nextRoot + ((i % 2 == 0) ? -1 : 1);       // cromatismo
+                    else
+                    {
+                        // nota d'accordo (o di scala) che si muove verso la prossima fondamentale
+                        const int dir = nextRoot >= cur ? 1 : -1;
+                        p = cur + dir;
+                        bool found = false;
+                        for (int step = 1; step <= 4 && ! found; ++step)
+                        {
+                            const int q = cur + dir * step;
+                            if (std::find (pcs.begin(), pcs.end(), mod12 (q)) != pcs.end()) { p = q; found = true; }
+                        }
+                        for (int step = 1; step <= 2 && ! found; ++step)
+                            if (inParentScale (cur + dir * step, o.key)) { p = cur + dir * step; found = true; }
+                    }
+                    p = std::clamp (p, 28, 55);
+                    add (p, b * 4, 4, vel - (b == 0 ? 0 : 10));
+                    cur = p;
+                }
+                break;
+            }
+        }
+        prevRoot = root;
+    }
     std::stable_sort (out.begin(), out.end(), [] (const Note& a, const Note& b) { return a.startTick < b.startTick; });
     return out;
 }
 
 // ============================================================ melodia
+const char* contourName (Contour c)
+{
+    switch (c)
+    {
+        case Contour::Free:    return "Contorno libero";
+        case Contour::Arch:    return "Arco (sale e scende)";
+        case Contour::Rising:  return "Ascendente";
+        case Contour::Falling: return "Discendente";
+        case Contour::Wave:    return "Onda";
+    }
+    return "";
+}
+
+const char* registerName (int r)
+{
+    static const char* names[kNumRegisters] = { "Registro basso", "Registro medio", "Registro medio-alto", "Registro alto" };
+    return names[std::clamp (r, 0, kNumRegisters - 1)];
+}
+
+void registerRange (int r, int& low, int& high)
+{
+    static const int lo[kNumRegisters] = { 48, 55, 60, 67 };
+    static const int hi[kNumRegisters] = { 67, 76, 84, 91 };
+    r = std::clamp (r, 0, kNumRegisters - 1);
+    low = lo[r];
+    high = hi[r];
+}
+
+void applySwing (std::vector<Note>& notes, double amount)
+{
+    const int shift = int (std::lround (std::clamp (amount, 0.0, 1.0) * kPPQ / 6.0));
+    if (shift <= 0) return;
+    for (auto& n : notes)
+        if (n.startTick % kPPQ == kPPQ / 2)
+        {
+            n.startTick += shift;
+            n.lengthTick = std::max (1, n.lengthTick - shift);
+        }
+}
+
 std::vector<Note> generateMelody (const std::vector<Chord>& chords, const MelodyOptions& o)
 {
     std::vector<Note> out;
     if (chords.empty()) return out;
 
+    const auto& gp = genreProfile (o.genre);
     Rng rng (o.seed);
     const int spc = std::max (1, o.stepsPerChord);
     const int total = int (chords.size()) * spc;
     const int numBars = (total + 15) / 16;
     const double d = std::clamp (o.density, 0.0, 1.0);
+    const double tension = std::clamp (o.tension, 0.0, 1.0);
+    const double motif = std::clamp (gp.motif, 0.0, 1.0);
     const int low = std::min (o.lowNote, o.highNote);
     const int high = std::max (o.lowNote, o.highNote);
     const int centre = (low + high) / 2;
+    const double pi = 3.14159265358979;
 
-    // ritmo: una griglia da 16 step per battuta, spesso ripetuta con piccole varianti
-    std::vector<std::array<bool, 16>> bars (static_cast<size_t> (numBars));
-    auto fresh = [&] (std::array<bool, 16>& p)
+    auto chordAt = [&] (int step) -> const Chord& { return chords[size_t (std::min (step / spc, int (chords.size()) - 1))]; };
+
+    // ------------------------------------------------ ritmo: frasi di 4 battute (motivo, ripetizione, variante, cadenza)
+    auto onsetProb = [&] (int s)
     {
-        for (int s = 0; s < 16; ++s)
+        if (! gp.customRhythm)
         {
-            double prob;
-            if (s == 0)          prob = 1.0;
-            else if (s % 4 == 0) prob = 0.45 + 0.45 * d;
-            else if (s % 2 == 0) prob = 0.65 * d;
-            else                 prob = 0.30 * d * d;
-            p[size_t (s)] = rng.uni() < prob;
+            if (s == 0)     return 1.0;
+            if (s % 4 == 0) return 0.45 + 0.45 * d;
+            if (s % 2 == 0) return 0.65 * d;
+            return 0.30 * d * d;
+        }
+        const double base = gp.rhythm[size_t (s)];
+        if (s == 0) return std::min (1.0, base + 0.25);
+        double p = base * (0.3 + 1.4 * d);
+        if (s % 2 == 1) p += std::max (0.0, d - 0.65) * 0.5;
+        return std::clamp (p, 0.0, 1.0);
+    };
+
+    using Bar = std::array<bool, 16>;
+    std::vector<Bar> bars (static_cast<size_t> (numBars));
+    std::vector<int> source (static_cast<size_t> (numBars), -1);     // battuta di cui si ripete il motivo
+    auto fresh = [&] (Bar& p) { for (int s = 0; s < 16; ++s) p[size_t (s)] = rng.uni() < onsetProb (s); };
+    auto mutate = [&] (Bar& p, int count)
+    {
+        for (int i = 0; i < count; ++i)
+        {
+            const size_t s = size_t (1 + int (rng.uni() * 15));
+            p[s] = ! p[s];
         }
     };
+
     for (int b = 0; b < numBars; ++b)
     {
-        if (b == 0) { fresh (bars[0]); continue; }
-        if (rng.uni() < 0.5)
+        const int pos = b % 4;
+        Bar& bar = bars[size_t (b)];
+        if (b == 0)
+            fresh (bar);
+        else if (pos == 0)
         {
-            bars[size_t (b)] = bars[0];
-            if (rng.uni() < 0.5)
+            if (rng.uni() < motif * 0.8) { bar = bars[0]; source[size_t (b)] = 0; }
+            else fresh (bar);
+        }
+        else if (pos == 2)
+        {
+            if (rng.uni() < motif)
             {
-                const size_t s = size_t (1 + int (rng.uni() * 15));
-                bars[size_t (b)][s] = ! bars[size_t (b)][s];
+                bar = bars[size_t (b - 2)];
+                source[size_t (b)] = b - 2;
+                if (rng.uni() < 0.6) mutate (bar, 1 + int (rng.uni() * 2));
             }
+            else fresh (bar);
+        }
+        else if (rng.uni() < motif)
+        {
+            bar = bars[size_t (b - 1)];
+            source[size_t (b)] = b - 1;
+            if (rng.uni() < 0.35) mutate (bar, 1);
         }
         else
-            fresh (bars[size_t (b)]);
+            fresh (bar);
+
+        if (pos == 3 || (b == numBars - 1 && numBars > 1))      // fine frase: si respira
+            for (int s = 8; s < 16; ++s)
+                bar[size_t (s)] = s == 8 || (s == 12 && rng.uni() < 0.5 * d);
+        bar[0] = true;
     }
 
     std::vector<int> onsets;
     for (int s = 0; s < total; ++s)
         if (bars[size_t (s / 16)][size_t (s % 16)] || s % spc == 0) onsets.push_back (s);
+
+    // ------------------------------------------------ contorno
+    auto target = [&] (int s) -> double
+    {
+        const double t = total > 1 ? double (s) / double (total - 1) : 0.0;
+        const double span = high - low;
+        switch (o.contour)
+        {
+            case Contour::Arch:    return low + span * (0.3 + 0.45 * std::sin (pi * t));
+            case Contour::Rising:  return low + span * (0.25 + 0.55 * t);
+            case Contour::Falling: return low + span * (0.8 - 0.55 * t);
+            case Contour::Wave:    return low + span * (0.5 + 0.28 * std::sin (2.0 * pi * t * std::max (1.0, numBars / 2.0)));
+            case Contour::Free:    break;
+        }
+        return centre;
+    };
+    const double pull = o.contour == Contour::Free ? 10.0 : 6.0;
+
+    // gradi della scala nel registro (per ripetere il motivo "in sequenza" sul nuovo accordo)
+    std::vector<int> scalePitches;
+    for (int q = low - 12; q <= high + 12; ++q)
+        if (inScale (q, o.key)) scalePitches.push_back (q);
+    auto scaleIndex = [&] (int p)
+    {
+        int best = 0;
+        for (int i = 0; i < int (scalePitches.size()); ++i)
+            if (std::abs (scalePitches[size_t (i)] - p) < std::abs (scalePitches[size_t (best)] - p)) best = i;
+        return best;
+    };
+    auto scaleStep = [&] (int p, int steps)
+    {
+        if (scalePitches.empty()) return p;
+        const int i = std::clamp (scaleIndex (p) + steps, 0, int (scalePitches.size()) - 1);
+        return scalePitches[size_t (i)];
+    };
+
+    std::vector<char> transfer (static_cast<size_t> (numBars), 0);
+    for (int b = 0; b < numBars; ++b)
+        transfer[size_t (b)] = source[size_t (b)] >= 0 && rng.uni() < 0.35 + 0.6 * motif;
+    std::vector<int> pitchAt (static_cast<size_t> (total), -1);
+    int anchorBar = -1, anchorNew = 0, anchorSrc = 0;
 
     int prev = centre, dir = 0, lastInterval = 0;
     const double spread = 1.2 + std::clamp (o.leaps, 0.0, 1.0) * 7.0;
@@ -711,67 +1263,118 @@ std::vector<Note> generateMelody (const std::vector<Chord>& chords, const Melody
     for (size_t idx = 0; idx < onsets.size(); ++idx)
     {
         const int s = onsets[idx];
-        const Chord& ch = chords[size_t (s / spc)];
+        const int b = s / 16;
+        const Chord& ch = chordAt (s);
         const auto cpcs = chordPitchClasses (ch);
-        auto isChordTone = [&] (int pc) { return std::find (cpcs.begin(), cpcs.end(), pc) != cpcs.end(); };
+        auto isChordTone = [&] (int pc) { return std::find (cpcs.begin(), cpcs.end(), mod12 (pc)) != cpcs.end(); };
+        auto isExtension = [&] (int pc)
+        {
+            return (mod12 (pc) == mod12 (ch.root + 2) || mod12 (pc) == mod12 (ch.root + 9)) && inScale (pc, o.key);
+        };
         const bool chordStart = s % spc == 0;
         const bool strong = s % 4 == 0;
+        const int srcStep = source[size_t (b)] >= 0 ? s - 16 * (b - source[size_t (b)]) : -1;
+        const bool canTransfer = transfer[size_t (b)] && srcStep >= 0 && pitchAt[size_t (srcStep)] >= 0;
 
-        std::vector<std::pair<int, double>> cand;
-        double sum = 0;
-        for (int q = low; q <= high; ++q)
+        int pitch = -1;
+        if (canTransfer && anchorBar == b)
         {
-            const int pc = mod12 (q);
-            const bool ct = isChordTone (pc);
-            const bool sc = inScale (pc, o.key);
-            if (! ct && ! sc) continue;
-
-            double w;
-            if (chordStart)  w = ct ? 1.0 : 0.0;
-            else if (strong) w = ct ? 1.0 : 0.12;
-            else             w = ct ? (sc ? 1.25 : 0.6) : 1.0;
-            if (w <= 0) continue;
-
-            const int iv = q - prev;
-            w *= std::exp (-double (std::abs (iv)) / spread);
-            if (iv == 0) w *= (s % 2 == 1 ? 0.3 : 0.6);
-            if (dir != 0 && iv != 0 && ((iv > 0) == (dir > 0))) w *= 1.25;
-            if (std::abs (lastInterval) >= 5 && iv != 0 && ((iv > 0) != (lastInterval > 0)) && std::abs (iv) <= 2) w *= 1.8;
-            w *= std::exp (-double (std::abs (q - centre)) / 10.0);
-
-            cand.push_back ({ q, w });
-            sum += w;
-        }
-
-        int pitch = prev;
-        if (cand.empty() || sum <= 0)
-        {
-            int bestDist = 1000;
-            for (int q = low; q <= high; ++q)
-                if (isChordTone (mod12 (q)) && std::abs (q - prev) < bestDist) { bestDist = std::abs (q - prev); pitch = q; }
-        }
-        else
-        {
-            double r = rng.uni() * sum;
-            pitch = cand.back().first;
-            for (auto& c : cand)
+            // stesso disegno del motivo, trasportato per gradi di scala
+            const int delta = scaleIndex (pitchAt[size_t (srcStep)]) - scaleIndex (anchorSrc);
+            pitch = scaleStep (anchorNew, delta);
+            if ((chordStart || (strong && tension < 0.5)) && ! isChordTone (pitch))
             {
-                r -= c.second;
-                if (r <= 0) { pitch = c.first; break; }
+                int best = -1;
+                for (int dd = 1; dd <= 2 && best < 0; ++dd)
+                {
+                    const int a = pitch + (lastInterval >= 0 ? dd : -dd), c = pitch - (lastInterval >= 0 ? dd : -dd);
+                    if (isChordTone (a)) best = a;
+                    else if (isChordTone (c)) best = c;
+                }
+                pitch = best;
+            }
+            if (pitch < low || pitch > high) pitch = -1;
+        }
+
+        if (pitch < 0)
+        {
+            std::vector<std::pair<int, double>> cand;
+            double sum = 0;
+            for (int q = low; q <= high; ++q)
+            {
+                const bool ct = isChordTone (q);
+                const bool sc = inScale (q, o.key);
+                if (! ct && ! sc) continue;
+                const bool ext = ! ct && isExtension (q);
+
+                double w;
+                if (chordStart)  w = ct ? 1.0 : (ext && tension > 0.5 ? (tension - 0.5) * 0.8 : 0.0);
+                else if (strong) w = ct ? 1.0 : (ext ? 0.12 + 0.7 * tension : 0.12 + 0.45 * tension);
+                else             w = ct ? (sc ? 1.25 : 0.6) * (1.0 - 0.35 * tension) : 1.0 + 0.3 * tension;
+                if (w <= 0) continue;
+
+                const int iv = q - prev;
+                w *= std::exp (-double (std::abs (iv)) / spread);
+                if (iv == 0) w *= (s % 2 == 1 ? 0.3 : 0.6);
+                if (dir != 0 && iv != 0 && ((iv > 0) == (dir > 0))) w *= 1.25;
+                if (std::abs (lastInterval) >= 5 && iv != 0 && ((iv > 0) != (lastInterval > 0)) && std::abs (iv) <= 2) w *= 1.8;
+                w *= std::exp (-std::abs (q - target (s)) / pull);
+
+                cand.push_back ({ q, w });
+                sum += w;
+            }
+
+            pitch = prev;
+            if (cand.empty() || sum <= 0)
+            {
+                int bestDist = 1000;
+                for (int q = low; q <= high; ++q)
+                    if (isChordTone (q) && std::abs (q - prev) < bestDist) { bestDist = std::abs (q - prev); pitch = q; }
+            }
+            else
+            {
+                double r = rng.uni() * sum;
+                pitch = cand.back().first;
+                for (auto& c : cand)
+                {
+                    r -= c.second;
+                    if (r <= 0) { pitch = c.first; break; }
+                }
+            }
+            if (canTransfer && anchorBar != b)
+            {
+                anchorBar = b;
+                anchorNew = pitch;
+                anchorSrc = pitchAt[size_t (srcStep)];
             }
         }
 
         const int next = idx + 1 < onsets.size() ? onsets[idx + 1] : total;
-        const int cap = 8 - int (d * 4);
+        int cap = 8 - int (d * 4);
+        if (gp.legato >= 0.97 || (b % 4 == 3 && s % 16 >= 8)) cap = 16;
         const int lenSteps = std::max (1, std::min (next - s, cap));
+        const double legato = gp.customRhythm ? std::min (gp.legato, 0.97) : 0.95;
         int vel = strong ? 98 : (s % 2 == 0 ? 86 : 72);
+        vel += int ((d - 0.5) * 16.0);
         vel = std::clamp (vel + int (rng.uni() * 11) - 5, 40, 120);
 
-        out.push_back ({ pitch, s * kStepTicks, std::max (1, int (lenSteps * kStepTicks * 0.95)), vel });
+        out.push_back ({ pitch, s * kStepTicks, std::max (1, int (lenSteps * kStepTicks * legato)), vel });
+        pitchAt[size_t (s)] = pitch;
         dir = (pitch > prev) - (pitch < prev);
         lastInterval = pitch - prev;
         prev = pitch;
     }
+
+    // tensione alta: note di avvicinamento cromatico prima dei tempi forti
+    if (tension > 0.55)
+        for (size_t i = 0; i + 1 < out.size(); ++i)
+        {
+            const int s = out[i].startTick / kStepTicks, sn = out[i + 1].startTick / kStepTicks;
+            if (s % 4 == 0 || s % spc == 0 || sn % 4 != 0) continue;
+            if (rng.uni() > (tension - 0.55) * 1.6) continue;
+            const int p = out[i + 1].pitch + (rng.uni() < 0.7 ? -1 : 1);
+            if (p >= low && p <= high && p != out[i + 1].pitch) out[i].pitch = p;
+        }
 
     if (o.resolveEnd && ! out.empty())
     {
@@ -783,6 +1386,8 @@ std::vector<Note> generateMelody (const std::vector<Chord>& chords, const Melody
         last.pitch = bestPitch;
         last.lengthTick = std::max (1, std::min (total * kStepTicks - last.startTick, 16 * kStepTicks));
     }
+
+    if (gp.swing > 0) applySwing (out, gp.swing);
     return out;
 }
 
@@ -822,11 +1427,11 @@ void snapNotesToScale (std::vector<Note>& notes, const Key& k)
 }
 
 std::vector<Chord> harmonizeMelody (const std::vector<Note>& melody, const Key& k, int stepsPerChord,
-                                    int numChords, bool sevenths, double adventure)
+                                    int numChords, bool sevenths, double adventure, Genre genre, int colour)
 {
     numChords = std::clamp (numChords, 1, kMaxChords);
     adventure = std::clamp (adventure, 0.0, 1.0);
-    const auto cands = buildCandidates (k, sevenths);
+    const auto cands = buildCandidates (k, sevenths, genre, colour);
     const size_t C = cands.size();
     const int slotTicks = std::max (1, stepsPerChord) * kStepTicks;
 
@@ -859,7 +1464,7 @@ std::vector<Chord> harmonizeMelody (const std::vector<Note>& melody, const Key& 
                 else if (! inScale (pc, k)) chromatic += pcW[pc];
             }
             double f = chordTone / total - 0.3 * chromatic / total;
-            f += cands[c].extra ? -0.04 * (1.0 - adventure) : 0.03;
+            f += cands[c].isExtra ? -0.04 * (1.0 - adventure) : 0.03;
             fit[size_t (i)][c] = f;
         }
     }
@@ -877,7 +1482,7 @@ std::vector<Chord> harmonizeMelody (const std::vector<Note>& melody, const Key& 
             int bp = 0;
             for (size_t p = 0; p < C; ++p)
             {
-                const double trans = (p == c) ? 0.2 : weightFrom (cands[p].chord, cands[c], k, adventure, nullptr) / 10.0;
+                const double trans = (p == c) ? 0.2 : weightFrom (cands[p].chord, cands[c], k, adventure, nullptr, genre) / 10.0;
                 const double sc = best[size_t (i - 1)][p] + lambda * trans;
                 if (sc > bs) { bs = sc; bp = int (p); }
             }

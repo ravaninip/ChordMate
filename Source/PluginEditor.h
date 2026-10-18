@@ -10,7 +10,7 @@ class ChordMatePanel : public juce::Component,
                        private juce::Timer
 {
 public:
-    static constexpr int kWidth = 980, kHeight = 740;
+    static constexpr int kWidth = 1100, kHeight = 820;
 
     explicit ChordMatePanel (ChordMateProcessor&);
     ~ChordMatePanel() override;
@@ -29,16 +29,20 @@ private:
     void refreshSuggestions();
     void refreshRoll();
     void refreshCaptureInfo();
+    void refreshArrangeInfo();
     void afterProgressionChanged();
+    void afterMelodySettingsChanged();
     void restartPreviewIfPlaying();
     void updateLivePanel();
 
     // azioni
     void onRootChanged (int newRoot);
+    void onGenreChanged (int index);
     void insertChord (const cm::Chord& c, bool replace);
     void slotMenu (int index);
-    void convertSevenths();
+    cm::Chord coloured (const cm::Chord& c) const;
     juce::File writeMidi (const std::vector<cm::Note>& notes, int lengthTicks, const juce::String& label);
+    juce::File writeArrangementMidi();
     void saveMidiAs (const juce::File& tempFile);
     cm::Chord suggestionSource() const;
 
@@ -48,8 +52,7 @@ private:
 
     // barra superiore
     juce::Label title;
-    juce::ComboBox rootBox, scaleBox;
-    juce::ToggleButton seventhsToggle;
+    juce::ComboBox rootBox, scaleBox, genreBox, colourBox;
     juce::Label bpmLabel;
     juce::TextButton playBtn;
     ui::LabeledSlider volume { ui::U8 ("Volume anteprima"), 0.0, 1.0, 0.01 };
@@ -61,7 +64,7 @@ private:
 
     // progressione
     juce::ComboBox presetBox, lengthBox, spcBox, styleBox;
-    juce::TextButton applyPresetBtn, randomBtn, clearBtn;
+    juce::TextButton applyPresetBtn, randomBtn, reharmBtn, clearBtn;
     juce::ToggleButton bassToggle;
     ui::LabeledSlider adventure { ui::U8 ("Avventura (accordi colore)"), 0.0, 1.0, 0.01 };
     std::array<ui::ChordSlot, cm::kMaxChords> slots;
@@ -70,14 +73,17 @@ private:
     std::vector<cm::Suggestion> currentSuggestions;
     int selectedSlot = -1;
 
-    // melodia
-    ui::LabeledSlider density { ui::U8 ("Densità ritmica"), 0.0, 1.0, 0.01 };
-    ui::LabeledSlider leaps { ui::U8 ("Salti melodici"), 0.0, 1.0, 0.01 };
-    ui::LabeledSlider lowNote { ui::U8 ("Nota più bassa"), 36, 96, 1 };
-    ui::LabeledSlider highNote { ui::U8 ("Nota più alta"), 36, 108, 1 };
+    // melodia: tre macro + contorno + registro
+    ui::LabeledSlider energy { ui::U8 ("Energia"), 0.0, 1.0, 0.01 };
+    ui::LabeledSlider movement { ui::U8 ("Movimento (salti)"), 0.0, 1.0, 0.01 };
+    ui::LabeledSlider tension { ui::U8 ("Tensione (colore)"), 0.0, 1.0, 0.01 };
+    juce::ComboBox contourBox, registerBox;
     juce::TextButton melodyBtn;
-    juce::ToggleButton resolveToggle;
     ui::RollView roll;
+
+    // arrangiamento
+    juce::ComboBox ensembleBox, polyBox;
+    juce::Label partsInfo, polyInfo;
 
     // cattura
     juce::TextButton recBtn, playCapBtn, clearCapBtn, harmonizeBtn;
@@ -87,7 +93,7 @@ private:
     juce::Label capInfo;
 
     // esportazione
-    ui::DragHandle dragChords, dragMelody, dragCapture;
+    ui::DragHandle dragChords, dragMelody, dragArrangement, dragCapture;
     juce::Label hint;
     std::unique_ptr<juce::FileChooser> chooser;
 
@@ -102,7 +108,7 @@ private:
 
     int lastCaptureRevision = 0;
 
-    juce::Rectangle<int> secProg, secMelody, secCapture, secExport;
+    juce::Rectangle<int> secProg, secMelody, secArrange, secCapture, secExport;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ChordMatePanel)
 };

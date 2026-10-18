@@ -216,6 +216,22 @@ int main (int argc, char** argv)
                 juce::PNGImageFormat png;
                 EXPECT (fos.openedOk() && png.writeImageToStream (img, fos));
                 std::printf ("  screenshot: %s (%dx%d)\n", argv[1], img.getWidth(), img.getHeight());
+
+                // secondo scatto: genere cinematico, orchestra sinfonica con poliaccordi
+                p.project = cm::Project();
+                p.project.key = { 9, cm::ScaleType::NaturalMinor };
+                p.project.genre = cm::Genre::Cinematic;
+                p.project.applyGenreDefaults();
+                p.project.applyPreset();
+                p.project.generateMelodyNow();
+                p.projectRevision.fetch_add (1);
+                std::unique_ptr<juce::AudioProcessorEditor> ed3 (p.createEditor());
+                const auto img2 = ed3->createComponentSnapshot (ed3->getLocalBounds(), true, 1.0f);
+                juce::File out2 = out.getSiblingFile (out.getFileNameWithoutExtension() + "_cinema.png");
+                out2.deleteFile();
+                juce::FileOutputStream fos2 (out2);
+                EXPECT (fos2.openedOk() && png.writeImageToStream (img2, fos2));
+                EXPECT (p.project.arrangement().size() >= 8);
             }
         }
     }

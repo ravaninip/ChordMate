@@ -16,7 +16,8 @@ set(CHORDMATE_JUCE_TAG "8.0.15" CACHE STRING "Tag di JUCE da scaricare")
 add_library(chordmate_engine STATIC
     Source/Engine/Theory.cpp
     Source/Engine/MidiWriter.cpp
-    Source/Engine/Project.cpp)
+    Source/Engine/Project.cpp
+    Source/Engine/Style.cpp)
 target_include_directories(chordmate_engine PUBLIC Source)
 set_target_properties(chordmate_engine PROPERTIES POSITION_INDEPENDENT_CODE ON)
 if(MSVC)

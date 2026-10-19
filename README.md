@@ -13,6 +13,10 @@ orchestra, and lets you drag the result straight into Live as MIDI clips.
 
 Everything runs offline and is deterministic: no network access, no telemetry, no accounts.
 
+<p align="center">
+  <img src="docs/images/screenshot-pop.png" alt="ChordMate plug-in window: key and genre selectors, chord progression with next-chord suggestions, melody piano roll, arranging, MIDI capture and drag-and-drop export" width="820" />
+</p>
+
 > [!NOTE]
 > The plug-in interface is currently in Italian. An English UI is planned (see [Roadmap](#roadmap)).
 
@@ -80,6 +84,11 @@ Host: Ableton Live 12. Other hosts that load VST 3 or AU instruments should work
 - **Live detection** – the chord you are holding and the most likely key (Krumhansl profiles).
 - **Session recall** – progression, melody, capture, settings and window size are saved with the Live set.
 - **Resizable UI** (60–200 %), and recording continues while the plug-in window is closed.
+
+<p align="center">
+  <img src="docs/images/screenshot-cinematic.png" alt="ChordMate with the Cinematic genre in A minor: epic i–♭VI–♭III–♭VII progression arranged for symphony orchestra with polychords" width="820" /><br />
+  <em>Cinematic genre in A minor, arranged for symphony orchestra with upper-structure polychords.</em>
+</p>
 
 ## Installation
 

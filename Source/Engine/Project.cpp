@@ -192,10 +192,11 @@ std::vector<Note> notesFromString (const std::string& s)
     std::vector<Note> out;
     for (const auto& item : split (s, ';'))
     {
+        if (int (out.size()) >= kMaxStoredNotes) break;
         const auto f = split (item, ':');
         if (f.size() != 4) continue;
-        out.push_back ({ std::clamp (toInt (f[0]), 0, 127), std::max (0, toInt (f[1])),
-                         std::max (1, toInt (f[2])), std::clamp (toInt (f[3], 90), 1, 127) });
+        out.push_back ({ std::clamp (toInt (f[0]), 0, 127), std::clamp (toInt (f[1]), 0, kMaxStoredTick),
+                         std::clamp (toInt (f[2]), 1, kMaxStoredTick), std::clamp (toInt (f[3], 90), 1, 127) });
     }
     return out;
 }
@@ -250,7 +251,7 @@ std::string Project::serialize() const
 
 bool Project::deserialize (const std::string& text)
 {
-    if (text.rfind ("ChordMateProject", 0) != 0) return false;
+    if (text.size() > kMaxStateBytes || text.rfind ("ChordMateProject", 0) != 0) return false;
 
     Project p;   // parte dai default: i campi mancanti restano validi
     bool haveColour = false;
@@ -264,7 +265,7 @@ bool Project::deserialize (const std::string& text)
         else if (k == "scale")      p.key.scale = scaleFromIndex (toInt (v));
         else if (k == "sevenths")   p.sevenths = toInt (v) != 0;
         else if (k == "adventure")  p.adventure = std::clamp (toInt (v) / 1000.0, 0.0, 1.0);
-        else if (k == "preset")     p.presetIndex = std::max (0, toInt (v));
+        else if (k == "preset")     p.presetIndex = std::clamp (toInt (v), 0, 255);
         else if (k == "length")     p.progLength = std::clamp (toInt (v, 4), 1, kMaxChords);
         else if (k == "spc")        p.stepsPerChord = std::clamp (toInt (v, 16), 4, 64);
         else if (k == "style")      p.chordStyle = ChordStyle (std::clamp (toInt (v), 0, kNumChordStyles - 1));
@@ -276,7 +277,7 @@ bool Project::deserialize (const std::string& text)
         else if (k == "high")       p.highNote = std::clamp (toInt (v, 84), 0, 127);
         else if (k == "melodySeed") p.melodySeed = uint32_t (std::max (0, toInt (v, 1)));
         else if (k == "resolve")    p.resolveEnd = toInt (v) != 0;
-        else if (k == "qgrid")      p.quantGrid = std::max (0, toInt (v));
+        else if (k == "qgrid")      p.quantGrid = std::clamp (toInt (v), 0, kPPQ);
         else if (k == "qstr")       p.quantStrength = std::clamp (toInt (v) / 1000.0, 0.0, 1.0);
         else if (k == "qlen")       p.quantLength = toInt (v) != 0;
         else if (k == "snap")       p.snapToScale = toInt (v) != 0;

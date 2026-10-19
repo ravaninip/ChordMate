@@ -28,7 +28,7 @@ bool ChordMateProcessor::isBusesLayoutSupported (const BusesLayout& layouts) con
 
 void ChordMateProcessor::prepareToPlay (double sr, int)
 {
-    sampleRate = sr;
+    sampleRate = sr > 0.0 ? sr : 44100.0;
     synth.setCurrentPlaybackSampleRate (sr);
     synthMidi.ensureSize (4096);
 }
@@ -284,7 +284,7 @@ bool ChordMateProcessor::pullCapturedNotes()
         if (it == pending.end()) return;
         const double start = std::max (0.0, it->second.beat);
         const double end = std::max (start, e.beat);
-        if (project.capture.size() < 4096)
+        if (project.capture.size() < (size_t) cm::kMaxStoredNotes)
             project.capture.push_back ({ e.pitch, (int) std::lround (start * cm::kPPQ),
                                          std::max (30, (int) std::lround ((end - start) * cm::kPPQ)),
                                          std::max (1, it->second.velocity) });

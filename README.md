@@ -2,29 +2,56 @@
 
 [![Build](https://github.com/ravaninip/ChordMate/actions/workflows/build.yml/badge.svg)](https://github.com/ravaninip/ChordMate/actions/workflows/build.yml)
 [![License: AGPL v3](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
-![Formats](https://img.shields.io/badge/formats-VST3%20%7C%20AU-informational)
+![Formats](https://img.shields.io/badge/formats-VST%203%20%7C%20AU-informational)
 ![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20macOS-lightgrey)
 
-**ChordMate is an arranging assistant plugin for Ableton Live 12.** It suggests chords, progressions and
-melodies using music theory, arranges them for ensembles from piano to full orchestra, and lets you drag
-the result straight into Live as MIDI clips.
+<img src="docs/images/VST_Compatible_Logo_Steinberg_with_TM.png" alt="VST Compatible" width="110" align="right" />
 
-Everything runs offline and is deterministic: no network, no AI models, no accounts.
+**ChordMate is an arranging assistant for Ableton Live 12, available as a VST® 3 and Audio Unit plug-in.**
+It suggests chords, progressions and melodies using music theory, arranges them for ensembles from piano to full
+orchestra, and lets you drag the result straight into Live as MIDI clips.
+
+Everything runs offline and is deterministic: no network access, no telemetry, no accounts.
 
 > [!NOTE]
-> The plugin interface is currently in Italian. An English UI is planned (see [Roadmap](#roadmap)).
+> The plug-in interface is currently in Italian. An English UI is planned (see [Roadmap](#roadmap)).
 
-## Contents
+## Table Of Contents
 
-- [Features](#features)
-- [Installation](#installation)
-- [Using ChordMate in Live](#using-chordmate-in-live)
-- [Building from source](#building-from-source)
-- [Project layout](#project-layout)
-- [Known limitations](#known-limitations)
-- [Roadmap](#roadmap)
-- [Contributing](#contributing)
-- [License](#license)
+1. [The ChordMate package](#the-chordmate-package)
+1. [System requirements](#system-requirements)
+1. [Features](#features)
+1. [Installation](#installation)
+1. [Using ChordMate in Live](#using-chordmate-in-live)
+1. [How to build ChordMate](#how-to-build-chordmate)
+1. [Known limitations](#known-limitations)
+1. [Roadmap](#roadmap)
+1. [Contributing](#contributing)
+1. [Security](#security)
+1. [License & Usage guidelines](#license--usage-guidelines)
+
+## The ChordMate package
+
+```
+Source/Engine/     pure C++ theory engine (no JUCE, unit-testable)
+  Theory.*         scales, chords, suggestions, progressions, voicing, bass, melody, quantisation, harmonisation
+  Style.*          genres, roman-numeral presets, polychords, SATB voice leading, ensemble arranging
+  MidiWriter.*     Standard MIDI File writer (480 PPQ, tempo and time signature)
+  Project.*        full plug-in state and text serialisation
+Source/            JUCE plug-in (processor, editor, preview synth, widgets)
+Tests/             engine tests and host-less plug-in smoke test
+docs/              additional documentation
+```
+
+## System requirements
+
+| Operating system | Architecture | Formats | Compiler (to build) | Notes |
+| :--- | :--- | :--- | :--- | :--- |
+| Windows 10 / 11 | x86_64 | VST 3 | MSVC 2022 | Prebuilt in Releases |
+| macOS 11 or later | x86_64, Apple Silicon (universal) | VST 3, AU | Xcode 14 or later | Prebuilt in Releases (unsigned) |
+| Linux (Ubuntu 24.04) | x86_64 | VST 3 | GCC 13 or later | Build from source; not officially supported |
+
+Host: Ableton Live 12. Other hosts that load VST 3 or AU instruments should work but are not tested.
 
 ## Features
 
@@ -52,27 +79,27 @@ Everything runs offline and is deterministic: no network, no AI models, no accou
   **harmonise** the captured melody (Viterbi search over fit + transition scores).
 - **Live detection** – the chord you are holding and the most likely key (Krumhansl profiles).
 - **Session recall** – progression, melody, capture, settings and window size are saved with the Live set.
-- **Resizable UI** (60–200 %), and recording continues while the plugin window is closed.
+- **Resizable UI** (60–200 %), and recording continues while the plug-in window is closed.
 
 ## Installation
 
 1. Download the latest zip for your platform from [**Releases**](https://github.com/ravaninip/ChordMate/releases)
    (or the `ChordMate-windows` / `ChordMate-macos` artifact of a recent run in the
    [Actions](https://github.com/ravaninip/ChordMate/actions) tab).
-2. Copy the plugin bundle to your plug-in folder:
+2. Copy the plug-in bundle to your plug-in folder:
    - **Windows:** `ChordMate.vst3` → `C:\Program Files\Common Files\VST3`
    - **macOS:** `ChordMate.vst3` → `~/Library/Audio/Plug-Ins/VST3`, or `ChordMate.component` → `~/Library/Audio/Plug-Ins/Components`
-3. In Live: **Settings → Plug-Ins**, enable the system VST3 folder (and/or Audio Units) and press **Rescan**
+3. In Live: **Settings → Plug-Ins**, enable the system VST 3 folder (and/or Audio Units) and press **Rescan**
    (hold **Alt/Option** for a full rescan).
 
 > [!WARNING]
 > The binaries are not code-signed yet. On Windows, SmartScreen may ask for confirmation
-> (*More info → Run anyway*). On macOS, remove the quarantine flag if the plugin is blocked:
+> (*More info → Run anyway*). On macOS, remove the quarantine flag if the plug-in is blocked:
 > `xattr -dr com.apple.quarantine ~/Library/Audio/Plug-Ins/VST3/ChordMate.vst3`
 
 ## Using ChordMate in Live
 
-VST/AU plugins **cannot send MIDI to other tracks** in Live (a Live limitation, not a ChordMate one), so the
+Plug-ins **cannot send MIDI to other tracks** in Live (a Live limitation, not a ChordMate one), so the
 workflow is:
 
 | Direction | How |
@@ -91,50 +118,64 @@ off if you don't want to hear the input.
 3. To work from an existing part, route it with *MIDI From*, press *Record* [*● Registra*], then
    *Harmonize → chords* [*Armonizza → accordi*].
 
-## Building from source
+## How to build ChordMate
 
-Requirements: CMake ≥ 3.22 and a C++17 compiler (Visual Studio 2022 on Windows, Xcode on macOS, GCC/Clang on
-Linux). JUCE is fetched automatically from GitHub at configure time.
+### Get the source code from GitHub
+
+```bash
+git clone https://github.com/ravaninip/ChordMate.git
+```
+
+JUCE (which bundles the VST 3 SDK) is fetched automatically at configure time; no submodules are needed.
+
+### Build on Windows
+
+```powershell
+cmake -B build -G "Visual Studio 17 2022" -A x64
+cmake --build build --config Release --parallel
+ctest --test-dir build -C Release --output-on-failure
+```
+
+Or use the one-command script described in [docs/BUILDING_WINDOWS.md](docs/BUILDING_WINDOWS.md).
+
+### Build on macOS
+
+```bash
+cmake -B build -G Xcode -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+cmake --build build --config Release --parallel
+ctest --test-dir build -C Release --output-on-failure
+```
+
+### Build on Linux
+
+Install the JUCE dependencies (Ubuntu: `libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxext-dev
+libfreetype-dev libfontconfig1-dev libasound2-dev`), then:
 
 ```bash
 cmake -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build --config Release --parallel
-ctest --test-dir build -C Release --output-on-failure   # engine tests (21,000+ checks)
+cmake --build build --parallel
+ctest --test-dir build --output-on-failure
 ```
 
-The plugin ends up in `build/ChordMate_artefacts/Release/VST3/ChordMate.vst3` (and `AU/` on macOS).
+The plug-in ends up in `build/ChordMate_artefacts/Release/VST3/ChordMate.vst3` (and `AU/` on macOS).
+
+### Build options
 
 | CMake option | Default | Description |
 |---|---|---|
-| `CHORDMATE_BUILD_PLUGIN` | `ON` | Build the JUCE plugin (downloads JUCE). Turn off to build and test only the engine. |
-| `CHORDMATE_BUILD_TESTS` | `ON` | Build the theory-engine tests. |
+| `CHORDMATE_BUILD_PLUGIN` | `ON` | Build the JUCE plug-in (downloads JUCE). Turn off to build and test only the engine. |
+| `CHORDMATE_BUILD_TESTS` | `ON` | Build the theory-engine tests (25,000+ checks). |
 | `CHORDMATE_BUILD_PLUGIN_TESTS` | `OFF` | Host-less smoke test of processor and editor; can save UI screenshots. |
-| `CHORDMATE_COPY_AFTER_BUILD` | `OFF` | Copy the plugin into the user's VST3/AU folder after building. |
+| `CHORDMATE_COPY_AFTER_BUILD` | `OFF` | Copy the plug-in into the user's VST 3/AU folder after building. |
 | `CHORDMATE_JUCE_PATH` | *(empty)* | Use a local JUCE checkout instead of downloading it. |
 | `CHORDMATE_JUCE_TAG` | `8.0.15` | JUCE tag to download. |
 
-Plugin smoke test (no host needed, writes two UI screenshots):
+Plug-in smoke test (no host needed, writes two UI screenshots):
 
 ```bash
 cmake -B build -DCHORDMATE_BUILD_PLUGIN_TESTS=ON
 cmake --build build --target chordmate_plugin_smoke
 ./build/chordmate_plugin_smoke screenshot.png
-```
-
-**Windows users:** see [docs/BUILDING_WINDOWS.md](docs/BUILDING_WINDOWS.md) for a step-by-step guide and the
-one-command `build-windows.ps1` script.
-
-## Project layout
-
-```
-Source/Engine/     pure C++ theory engine (no JUCE, unit-testable)
-  Theory.*         scales, chords, suggestions, progressions, voicing, bass, melody, quantisation, harmonisation
-  Style.*          genres, roman-numeral presets, polychords, SATB voice leading, ensemble arranging
-  MidiWriter.*     Standard MIDI File writer (480 PPQ, tempo and time signature)
-  Project.*        full plugin state and text serialisation
-Source/            JUCE plugin (processor, editor, preview synth, widgets)
-Tests/             engine tests and plugin smoke test
-docs/              additional documentation
 ```
 
 ## Known limitations
@@ -144,26 +185,38 @@ docs/              additional documentation
   record with Live playing and the metronome on.
 - Clips imported from MIDI files take their length from the end of the track (rounded to the bar); adjust the
   clip loop if Live shows a different length.
-- The UI is tested in CI builds and the smoke test; please report anything that behaves differently in your host.
 
 ## Roadmap
 
 - English user interface (and translatable strings)
 - Code-signed and notarised installers for Windows and macOS
 - Transport-synced preview
-- CLAP format and testing in more DAWs
+- CLAP format and testing in more hosts
 
 Ideas and votes are welcome in [Issues](https://github.com/ravaninip/ChordMate/issues).
 
 ## Contributing
 
 Bug reports, feature ideas and pull requests are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md) and the
-[Code of Conduct](CODE_OF_CONDUCT.md) first. Security issues: see [SECURITY.md](SECURITY.md).
+[Code of Conduct](CODE_OF_CONDUCT.md) first.
 
-## License
+## Security
 
-ChordMate is free software licensed under the [GNU Affero General Public License v3.0](LICENSE).
+ChordMate makes no network connections, collects no data and writes files only to the system temporary folder
+(for drag-and-drop) and to locations you choose. To report a vulnerability, see [SECURITY.md](SECURITY.md).
 
-It is built with [JUCE](https://juce.com) (used under the AGPLv3) and the Steinberg VST3 SDK.
-VST is a registered trademark of Steinberg Media Technologies GmbH. Ableton and Live are trademarks of
-Ableton AG. ChordMate is not affiliated with or endorsed by either company.
+## License & Usage guidelines
+
+- **ChordMate** is free software under the [GNU Affero General Public License v3.0](LICENSE).
+- It is built with [JUCE](https://juce.com) 8, used under the AGPLv3, which bundles the
+  [VST 3 SDK](https://github.com/steinbergmedia/vst3sdk) (MIT license).
+- Third-party components and their licenses are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+### Trademarks
+
+VST is a registered trademark of Steinberg Media Technologies GmbH.
+The VST Compatible Logo is used unaltered, in accordance with the
+[Steinberg VST Usage Guidelines](https://github.com/steinbergmedia/vst3sdk/blob/master/VST3_Usage_Guidelines.pdf).
+
+Ableton and Live are trademarks of Ableton AG. Audio Units is a trademark of Apple Inc.
+ChordMate is an independent project and is not affiliated with or endorsed by Steinberg, Ableton or Apple.

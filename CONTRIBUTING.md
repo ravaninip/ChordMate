@@ -34,6 +34,11 @@ On Windows see [docs/BUILDING_WINDOWS.md](docs/BUILDING_WINDOWS.md).
 - Music-theory logic belongs in `Source/Engine/` and must not depend on JUCE, so it stays unit-testable.
 - New engine behaviour needs tests in `Tests/theory_tests.cpp`.
 - Keep the engine deterministic: the same inputs and seed must produce the same output.
+- Treat anything loaded from a project or received as MIDI as untrusted: clamp values and bound sizes.
+- Never allocate, lock or do file I/O on the audio thread (`processBlock`).
+- Do not add network access or telemetry.
+- When writing about VST, follow the Steinberg VST Usage Guidelines: write "VST® 3" on first use, never
+  coin variants such as "VSTi", and keep the trademark attribution.
 - Do not change `PLUGIN_MANUFACTURER_CODE` or `PLUGIN_CODE` in `CMakeLists.txt`: hosts would no longer
   recognise saved sessions.
 

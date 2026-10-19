@@ -1,6 +1,6 @@
 # Building and installing ChordMate on Windows
 
-There are two ways to get ChordMate on Windows. **Option A** needs no tools at all; **option B** builds the
+ChordMate runs on Windows as a VST® 3 plug-in. There are two ways to get it. **Option A** needs no tools at all; **option B** builds the
 plugin on your own PC.
 
 ## Option A: download a prebuilt plugin
@@ -66,3 +66,7 @@ If you used option B, the script has already done this.
 | Live does not see the plugin | Rescan with Alt held; check the VST3 folders in Settings; make sure `ChordMate.vst3\Contents\x86_64-win\ChordMate.vst3` exists. |
 | Live reports the plugin as invalid or crashes | [Open an issue](https://github.com/ravaninip/ChordMate/issues/new/choose) and attach `Log.txt` from `%APPDATA%\Ableton\Live 12.x\Preferences\` plus the error message. |
 | SmartScreen or antivirus blocks the file | The plugin is not code-signed yet: *More info → Run anyway*, or add an exception. |
+
+---
+
+VST is a registered trademark of Steinberg Media Technologies GmbH.

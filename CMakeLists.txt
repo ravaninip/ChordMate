@@ -5,14 +5,14 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-option(CHORDMATE_BUILD_PLUGIN "Compila il plugin JUCE (scarica JUCE)" ON)
-option(CHORDMATE_BUILD_TESTS  "Compila i test del motore di teoria" ON)
-option(CHORDMATE_BUILD_PLUGIN_TESTS "Smoke test del plugin (processor ed editor senza host)" OFF)
-option(CHORDMATE_COPY_AFTER_BUILD "Copia il plugin nella cartella VST3/AU dell'utente dopo la build" OFF)
-set(CHORDMATE_JUCE_PATH "" CACHE PATH "Percorso di una copia locale di JUCE (vuoto = scarica da GitHub)")
-set(CHORDMATE_JUCE_TAG "8.0.15" CACHE STRING "Tag di JUCE da scaricare")
+option(CHORDMATE_BUILD_PLUGIN "Build the JUCE plugin (downloads JUCE)" ON)
+option(CHORDMATE_BUILD_TESTS  "Build the theory-engine tests" ON)
+option(CHORDMATE_BUILD_PLUGIN_TESTS "Host-less smoke test of the plugin processor and editor" OFF)
+option(CHORDMATE_COPY_AFTER_BUILD "Copy the plugin into the user's VST3/AU folder after building" OFF)
+set(CHORDMATE_JUCE_PATH "" CACHE PATH "Path to a local JUCE checkout (empty = download from GitHub)")
+set(CHORDMATE_JUCE_TAG "8.0.15" CACHE STRING "JUCE tag to download")
 
-# ---------------------------------------------------------------- motore di teoria (C++ puro)
+# ---------------------------------------------------------------- theory engine (pure C++)
 add_library(chordmate_engine STATIC
     Source/Engine/Theory.cpp
     Source/Engine/MidiWriter.cpp

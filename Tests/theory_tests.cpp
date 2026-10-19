@@ -468,6 +468,23 @@ static void testProject()
     CHECK (c.deserialize ("ChordMateProject v1\nkey=99\nprog=1:2,x:y,3\nmel=garbage\n"));   // tollerante
     CHECK (c.key.root <= 11);
 
+    // stato malevolo da un progetto: valori estremi, troppe note, dimensione eccessiva
+    {
+        std::string evil = "ChordMateProject v1\npreset=2147483647\nqgrid=2147483647\nspc=-5\nmel=";
+        for (int i = 0; i < kMaxStoredNotes + 100; ++i) evil += "60:2147483647:2147483647:999;";
+        evil += "\ncap=-1:-1:-1:-1\n";
+        Project e;
+        CHECK (e.deserialize (evil));
+        CHECK_EQ (int (e.melody.size()), kMaxStoredNotes);
+        for (const auto& n : e.melody) CHECK (n.startTick + n.lengthTick > n.startTick && n.velocity <= 127);
+        CHECK (e.quantGrid <= kPPQ && e.stepsPerChord >= 4);
+        e.applyPreset();
+        CHECK (! e.progression.empty());
+        CHECK (Project::captureLengthTicks (e.melody) > 0);
+        CHECK (! buildMidiFile (e.melody, 120.0, e.lengthTicks(), "x").empty());
+        CHECK (! e.deserialize ("ChordMateProject v1\n" + std::string (kMaxStateBytes, 'x')));
+    }
+
     // cattura -> snap + quantize -> armonizza
     Project p;
     p.key = { 0, ScaleType::Major };

@@ -8,6 +8,11 @@ namespace cm
 {
 // Stato completo del lavoro dell'utente: impostazioni + progressione + melodia + cattura MIDI.
 // Nessuna dipendenza da JUCE: serializzabile in testo e testabile da riga di comando.
+// Limiti applicati allo stato caricato da un progetto (che può provenire da un file non fidato).
+constexpr int kMaxStoredNotes = 4096;
+constexpr int kMaxStoredTick = 1 << 24;      // ~8700 battute a 480 PPQ: nessun overflow sommando inizio e durata
+constexpr size_t kMaxStateBytes = 1 << 20;
+
 struct Project
 {
     // stile
